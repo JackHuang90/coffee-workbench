@@ -1,0 +1,18 @@
+# Keep the formatter's LF output stable on Windows and Unix checkouts.
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.ts text eol=lf
+*.mts text eol=lf
+*.cts text eol=lf
+*.vue text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+.prettierrc text eol=lf
+.prettierignore text eol=lf
+
+# Source fixtures are byte-preserving protocol/provenance evidence.
+tests/fixtures/** -text
+firmware/tests/fixtures/** -text

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.sites-runtime/
+coverage/
+*.local
+# Rebuilt embedded firmware: local tools/caches/secrets and generated output
+firmware/.tools/
+firmware/.pio/
+firmware/build/
+firmware/artifacts/
+firmware/include/local_config.h
+firmware/**/__pycache__/

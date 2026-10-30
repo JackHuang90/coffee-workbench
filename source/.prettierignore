@@ -1,0 +1,21 @@
+# Dependencies, generated output, local runtime and device credentials.
+node_modules/
+dist/
+coverage/
+.sites-runtime/
+firmware/.tools/
+firmware/.pio/
+firmware/build/
+firmware/artifacts/
+firmware/include/local_config.h
+**/__pycache__/
+.env*
+*.local
+*.zip
+*.bin
+*.elf
+
+# Preserve upstream samples, provenance checksums and generated lock data.
+tests/fixtures/
+firmware/tests/fixtures/
+package-lock.json

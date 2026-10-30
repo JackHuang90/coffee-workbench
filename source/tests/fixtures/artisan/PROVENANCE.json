@@ -1,0 +1,62 @@
+{
+  "release": "v4.2.0",
+  "release_commit": "9334ed75f42a73526bd6da8905164706f06d34fa",
+  "license_url": "https://github.com/artisan-roaster-scope/artisan/blob/v4.2.0/LICENSE",
+  "note": "Upstream GPL-3.0 repository fixture data; retain upstream attribution and review licensing before distribution. Research fixtures only; no upstream implementation was copied into the app.",
+  "official": [
+    {
+      "local_path": "official-profile1.alog",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile1.alog",
+      "git_blob_sha": "7d995fc8b3aa1b6befe785ed8ed00ff582fef527",
+      "bytes": 425905
+    },
+    {
+      "local_path": "official-profile1.json",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile1.json",
+      "git_blob_sha": "5cb0955ebda7a40bed4bb3f1f6cf220146434bce",
+      "bytes": 388582
+    },
+    {
+      "local_path": "official-profile2.alog",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile2.alog",
+      "git_blob_sha": "d706b962ac630698c87df2cad71e11df26340347",
+      "bytes": 31039
+    },
+    {
+      "local_path": "official-profile2.json",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile2.json",
+      "git_blob_sha": "74d7f3f4fda704e1219cb3bc8f2c47343eac3190",
+      "bytes": 27210
+    },
+    {
+      "local_path": "official-profile3.alog",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile3.alog",
+      "git_blob_sha": "debf4dba64242cfd23dde9943ca6e13b6def21eb",
+      "bytes": 114080
+    },
+    {
+      "local_path": "official-profile3.json",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile3.json",
+      "git_blob_sha": "31f7849f0a15b1fd1ee3d20451126ac733170a33",
+      "bytes": 103625
+    },
+    {
+      "local_path": "official-profile4.alog",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile4.alog",
+      "git_blob_sha": "2d5431f1a66c558309b2523d073bd2e3214531c7",
+      "bytes": 20070
+    },
+    {
+      "local_path": "official-profile4.json",
+      "source_url": "https://github.com/artisan-roaster-scope/artisan/blob/9334ed75f42a73526bd6da8905164706f06d34fa/src/test/sanity/data/artisan/profile4.json",
+      "git_blob_sha": "dd90c091cb28118307e2b7e10dda28bf18b01783",
+      "bytes": 18338
+    }
+  ],
+  "sanitized_user": {
+    "local_path": "user-sanitized-v3.0.2.alog",
+    "sha256": "547cb8c04cba59dff125357ab7d29e086026f305c6eb49f82e30120f8682fbe7",
+    "bytes": 62785,
+    "note": "Derived locally; personal/free-form metadata replaced. Native core/extra series and indices retained. Original private user file is not included here."
+  }
+}
