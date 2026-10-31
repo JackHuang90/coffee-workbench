@@ -86,10 +86,20 @@ jobs:
       - name: Verify firmware checksums
         working-directory: source/firmware/artifacts
         run: sha256sum -c SHA256SUMS
-      - name: Package both reference images and flashing documentation
+      - name: Package firmware binaries and SHA256 only
         run: |
           mkdir -p ../../release
-          zip -r ../../release/coffee-workbench-firmware.zip artifacts README.md docs
+          package_dir="$(mktemp -d)"
+          for environment in s3_locked s3_virtual_demo; do
+            mkdir -p "$package_dir/$environment"
+            for image in bootloader.bin partitions.bin boot_app0.bin application.bin reference-merged.bin; do
+              cp "artifacts/$environment/$image" "$package_dir/$environment/$image"
+            done
+          done
+          cd "$package_dir"
+          sha256sum s3_locked/*.bin s3_virtual_demo/*.bin > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          zip -r "$GITHUB_WORKSPACE/release/coffee-workbench-firmware.zip" s3_locked s3_virtual_demo SHA256SUMS
       - name: Preserve build logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
@@ -129,6 +139,7 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           RUN_NUMBER: ${{ github.run_number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FLASH_DOCS_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/source/firmware/docs/build-and-flash.md
         run: |
           cd release
           sha256sum coffee-workbench-web.zip coffee-workbench-firmware.zip > SHA256SUMS
@@ -136,12 +147,13 @@ jobs:
             printf '自动构建 #%s\n\n' "$RUN_NUMBER"
             printf '源码提交：`%s`\n\n' "$COMMIT_SHA"
             printf '构建记录：%s\n\n' "$RUN_URL"
+            printf '刷机说明：%s\n\n' "$FLASH_DOCS_URL"
             printf '%s\n' \
               '- coffee-workbench-web.zip：前端静态文件，请通过 HTTP/HTTPS 服务访问。' \
-              '- coffee-workbench-firmware.zip：s3_locked 与 s3_virtual_demo 镜像、元数据、校验和及刷机文档。' \
+              '- coffee-workbench-firmware.zip：仅含 s3_locked 与 s3_virtual_demo 的 .bin 镜像和 SHA256SUMS。' \
               '- SHA256SUMS：以上两个下载包的 SHA256 校验和。' \
               '' \
-              '固件为未完成实机验证的参考构建，物理加热和风机输出禁用。刷机前阅读固件包中的 docs/build-and-flash.md，并核对 artifacts 下对应镜像的 flash-map.json；application.bin 不能写入地址 0。'
+              '固件为未完成实机验证的参考构建，物理加热和风机输出禁用。刷机前阅读上方对应源码版本的刷机说明；application.bin 写入 0x10000，不能写到地址 0。reference-merged.bin 从 0x0 写入，可能覆盖已保存的配置。'
           } > ../release-notes.md
       - name: Create or update this build's release
         shell: bash

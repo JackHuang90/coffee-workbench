@@ -30,8 +30,8 @@ npm run dev
 在 [Releases](https://github.com/JackHuang90/coffee-workbench/releases) 中下载：
 
 - `coffee-workbench-web.zip`：可部署到静态网站服务器的前端文件，解压后请通过 HTTP/HTTPS 访问。
-- `coffee-workbench-firmware.zip`：`artifacts/` 下包含 `s3_locked`、`s3_virtual_demo` 的分区镜像、合并镜像、元数据和校验文件；`docs/build-and-flash.md` 为刷机说明。
-- `SHA256SUMS`：两个下载包的校验和；固件包内 `artifacts/SHA256SUMS` 另外校验每个固件文件。
+- `coffee-workbench-firmware.zip`：只包含 `s3_locked/`、`s3_virtual_demo/` 两个目录下的 `.bin` 固件和顶层 `SHA256SUMS`；不包含 ELF、日志、配置、构建元数据或文档。刷机说明见 Release 中对应源码版本的文档链接。
+- `SHA256SUMS`：两个下载包的校验和；固件包内另有 `SHA256SUMS` 校验每个固件文件。
 
 自动标签格式为 `build-<构建编号>-<提交短哈希>`，指向实际构建的提交。每次推送生成独立版本，重新运行同一次构建会更新对应版本的附件。自动版本标记为预发布，正式版本可在 GitHub 上核验后手动发布。下载前端包不会自动部署网站。
 
@@ -52,6 +52,8 @@ npm run dev
 固件不绑定真实加热器或风机，当前设备连接用于只读状态与温度。仿真结果不代表真实烘焙设备行为，实物传感器及执行器仍需验证。
 
 曲线库保存在当前浏览器中；请主动导出重要数据作为备份。公开版本不内置私人站点地址，请在设备配网页中填写实际网页来源。Wi-Fi 密码与本地控制令牌应仅保存在设备或被忽略的本地配置中。
+
+源码、文档、测试样例、发布说明及交付包均不得包含实际站点发布地址、私人域名、真实凭据或个人机器路径。部署地址由使用者自行保存与填写；需要网址示例时统一使用 `https://example.com`，本机工具路径使用明确标注的通用示例。提交、打包或发布前应检查正文、链接目标、配置及生成文件，日志中的设备标识也应脱敏。
 
 ## 第三方测试数据
 

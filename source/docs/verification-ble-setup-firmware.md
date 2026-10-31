@@ -25,7 +25,7 @@
 
 先观察失败再实现：新增配网测试最初因缺少 `ble_setup.hpp` 编译失败；按键测试因缺少 `takeShortPress` 失败；适配器测试因缺少 linkState 和加密配网特征失败。实现后重新运行并通过。
 
-原生编译器：`D:/SDK/esp32_opt/w64devkit/bin/g++.exe`，使用 C++17 和 `-Wall -Wextra -Werror`。
+原生编译器：`<工具目录>/w64devkit/bin/g++.exe`，使用 C++17 和 `-Wall -Wextra -Werror`。
 
 - `tests/test_ble_setup.cpp + src/ble_setup.cpp`：通过。覆盖授权与撤销、等待确认及已授权超时、连接代际、毫秒回绕、完整分片、重复/错序拒绝、固定期限和4095字节边界。
 - `tests/test_provisioning.cpp + src/provisioning.cpp`：通过。保留候选配置及保存代数、校验、恢复按键和NVS记录核心测试；增加短按事件、单次消费和长按不确认测试。
@@ -35,7 +35,7 @@
 
 ## SDK 安全检查
 
-已检查固定 Arduino3.3.12 的源码，位置为 `D:/SDK/esp32_opt/pio/packages/framework-arduinoespressif32/libraries/BLE/src`。
+已检查固定 Arduino3.3.12 的源码，位置为 `<工具目录>/pio/packages/framework-arduinoespressif32/libraries/BLE/src`。
 
 - `BLECharacteristic::PROPERTY_WRITE_ENC` 直接映射到 NimBLE 的 `BLE_GATT_CHR_F_WRITE_ENC`，与 PROPERTY_WRITE 一起设置。回调同时检查 `desc.sec_state.encrypted`。
 - `BLESecurity::setAuthenticationMode(false,false,true)` 启用 Secure Connections，不要求绑定或MITM；`setCapability(BLE_HS_IO_NO_INPUT_OUTPUT)` 使用 Just Works；关闭强制认证，避免在回调中等待安全握手。

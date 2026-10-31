@@ -20,14 +20,14 @@ TMPDIR="$PWD/.tools/tmp" PLATFORMIO_CORE_DIR="$PWD/.tools/pio" \
 .tools/venv/bin/python tools/build_release.py
 ```
 
-本机 Windows 工具已放在 `D:\SDK\esp32_opt`。从仓库根目录执行：
+Windows 工具目录以下使用 `C:\Tools\esp32` 作为示例，请替换为自己的本地路径；不要将实际工具位置写入公开文档。从仓库根目录执行：
 
 ```powershell
-. ./toolchain.local/Activate.ps1
+$env:ROAST_TOOLS_DIR = 'C:\Tools\esp32'
+. ./toolchain.local/Activate.ps1 -ToolsRoot $env:ROAST_TOOLS_DIR
 Set-Location ./source/firmware
 pio run -e s3_locked -e s3_virtual_demo -e s3_network_compilecheck
 python tools/test_native.py
-$env:ROAST_TOOLS_DIR = 'D:\SDK\esp32_opt'
 python tools/build_release.py --collect-only
 ```
 
@@ -39,15 +39,29 @@ python tools/build_release.py --collect-only
 
 ## 刷机前校验
 
-`artifacts` 内的 `SHA256SUMS` 覆盖发布文件，可用以下命令核验：
+GitHub Release 的 `coffee-workbench-firmware.zip` 只包含以下文件，不附带日志、配置、ELF、构建元数据或文档：
+
+```text
+SHA256SUMS
+s3_locked/
+  bootloader.bin
+  partitions.bin
+  boot_app0.bin
+  application.bin
+  reference-merged.bin
+s3_virtual_demo/
+  （与 s3_locked 相同的五个 .bin 文件）
+```
+
+在解压目录中执行以下命令，校验包内全部固件文件；Release 附件中的另一份 `SHA256SUMS` 用于校验下载的 ZIP 文件：
 
 ```sh
 sha256sum -c SHA256SUMS
 ```
 
-每种镜像单独包含 `application.bin`、`application.elf`、`bootloader.bin`、`partitions.bin`、SDK 所需的启动初始化文件、`reference-merged.bin`、`flash-map.json`、构建元数据、镜像检查日志及栈审计结果。顶层清单记录文件大小、SHA256 和源码快照摘要。
+本地构建工具仍会在 `artifacts/` 内生成 ELF、`flash-map.json`、构建元数据、镜像检查日志及栈审计结果，用于内部验证；这些文件不会进入 Release 固件 ZIP。刷机说明保留在源码仓库，Release 提供对应提交版本的文档链接。
 
-**`application.bin` 是应用分区镜像，不能写到地址 0。** 实际偏移以该目录的 `flash-map.json` 为准，不能从其他 ESP32 型号推断。
+**`application.bin` 是应用分区镜像，不能写到地址 0。** 下载包按对应 Release 链接的文档填写地址；本地构建还可用 `flash-map.json` 核对，不能从其他 ESP32 型号推断。下文命令中的 `artifacts/s3_locked/` 指本地构建路径；使用下载包时改为解压目录中的 `s3_locked/`。
 
 ## 刷机参考步骤
 
@@ -69,6 +83,93 @@ esptool --chip esp32s3 --port YOUR_CONFIRMED_PORT --baud 460800 \
 对于分区表未改变、且已经安装同一项目旧版固件的设备，可按当前 `flash-map.json` 仅更新应用分区，保留已保存的网络和热点身份；执行前仍需核对实际布局并备份。
 
 `reference-merged.bin` 是从 `0x0` 起的离线合并镜像。合并文件的填充区域可能覆盖 NVS 等数据，因此优先采用上面的独立分区文件。不要因方便就擦除整片 Flash。现有安全启动或加密设备需要原有签名/配网流程，这些未签名参考文件不适用。
+
+## 使用网页通过 USB 刷机
+
+无需安装 PlatformIO，也可以用电脑浏览器打开[乐鑫官方 ESP Tool（esptool-js）](https://espressif.github.io/esptool-js/)，选择本地 `.bin` 文件刷入开发板。这里的“在线刷机”是**浏览器通过 USB 串口写入固件**；开发板不需要先连 Wi-Fi，也不是通过本项目的蓝牙配网或 Wi-Fi OTA 更新。当前项目没有提供 OTA 服务。
+
+### 准备固件与连接
+
+1. 打开项目的 [GitHub Releases](https://github.com/JackHuang90/coffee-workbench/releases)，选择需要的构建版本，下载 `coffee-workbench-firmware.zip` 和同一个 Release 的 `SHA256SUMS`；不需要下载前端包或 GitHub 自动生成的源码 ZIP。
+2. 核对压缩包的 SHA256 后解压。Windows PowerShell 可运行 `Get-FileHash .\coffee-workbench-firmware.zip -Algorithm SHA256`，将结果与下载的 `SHA256SUMS` 中同名条目比较。Linux/macOS 可按前面的校验方式检查；下载包内部的逐文件校验应在解压根目录中执行，本地构建的完整产物则在 `artifacts/` 目录中校验。
+3. 选定解压后的镜像目录：`s3_locked/` 用于锁定状态检查；`s3_virtual_demo/` 用于网页虚拟温控演示。本地构建时，这两个目录位于 `artifacts/` 下。后续全部文件都从同一个目录选择。两者均禁用物理执行器，板型仍须符合前文的 ESP32-S3 / 16 MB Flash / 8 MB OPI PSRAM 参考配置。
+4. 使用桌面版 Chrome 或 Edge 和支持数据传输的 USB 线连接开发板。若板上有多个 USB 接口，按载板说明选择支持下载的接口。关闭 PlatformIO 串口监视器、其他串口终端及占用该端口的浏览器标签页。
+5. 在 ESP Tool 的 **Program** 区域选择烧录波特率，例如 `460800`；不稳定时改为 `115200`。点击 **Connect**，在系统弹窗中选择开发板对应的串口。常规桌面 USB 串口连接无需勾选 **WebUSB (CH340)**。确认日志识别为 **ESP32-S3**，若型号或 Flash 容量与参考配置不符，应先核对硬件，不能靠改网页选项适配。
+
+若连接一直停在 `Connecting...` 或报 `Failed to connect with the device`，说明尚未完成与芯片下载引导程序的握手，此时还与所选固件文件及烧录地址无关。先尝试手动进入下载模式：
+
+1. 断开网页连接；必要时刷新页面，选择 `115200` 波特率，保持 **WebUSB (CH340)** 未勾选。
+2. **按住 BOOT 不松开 → 按一下并松开 RESET/EN → 继续按住 BOOT**。
+3. 保持 BOOT 按下，点击网页 **Connect** 并选择对应串口；等日志识别出 `ESP32-S3` 后再松开 BOOT。这可以避免连接期间的自动复位让芯片退出下载模式。
+4. 若仍失败，打开 **Show Debug log** 保存完整日志，核对所选 USB 接口及串口。串口已出现并不证明已经与 ESP32 握手成功；例如 `VendorID 0x1a86 ProductID 0x55d3` 表示 WCH USB 转串口通道，不是 ESP32-S3 原生 USB。若板上另有明确标注的原生 USB/OTG 下载接口，可按载板说明换口并重新选择端口，不要凭接口外观判断。
+
+USB 原生下载口可能以新的串口重新出现，需要重新选择。这个操作与运行中长按 BOOT 恢复配网不同。只有供电、没有串口时，先检查数据线、USB 接口，以及该载板 USB 转串口芯片是否需要安装驱动。手动下载模式仍无法握手时，应进一步检查启动日志、端口、供电或驱动，而不是先擦除 Flash。
+
+### 连接成功后的操作（本次用户反馈）
+
+2026-11-01，用户反馈在标注为 **USB/OTG** 的接口上，按住 BOOT 并复位、保持按下直到连接成功后，页面出现以下关键日志（省略设备 MAC）：
+
+```text
+Serial port WebSerial VendorID 0x1a86 ProductID 0x55d3
+Detecting chip type...
+ESP32-S3
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: Wi-Fi,BLE,Embedded PSRAM 8MB (AP_3v3)
+Uploading stub...
+Running stub...
+Stub running...
+Flash ID: 184020
+```
+
+这表示芯片已识别，烧录辅助程序已上传并运行，**连接成功，可以松开 BOOT，继续使用当前接口**；此时还不表示固件已写入成功。接口上的 USB/OTG 标注与日志中的 WCH USB 转串口标识分别保留为实物信息，不能仅凭标注认定当前使用的是 ESP32-S3 原生 USB 通道。
+
+接下来体验工作台虚拟温度、曲线和配网功能时：
+
+1. 进入解压后的 **`s3_virtual_demo/`**，四个文件全部从这个目录选择。需要锁定状态检查时改用 `s3_locked/`，不要混用两个目录。
+2. 用 **Add File** 添加 `bootloader.bin`、`partitions.bin`、`boot_app0.bin`、`application.bin`，分别填写 `0x0`、`0x8000`、`0xe000`、`0x10000`，详见下表。下载包不附带配置文件，须阅读对应 Release 链接的文档；本地构建还可核对 `flash-map.json`。
+3. **Flash Mode / Flash Frequency / Flash Size 全部选 `keep`**，保持已连接的波特率，不勾选 **Erase all**，也不额外添加合并镜像。
+4. 点击 **Program**，等待四个文件均写入完成且没有错误；写入期间保持供电，不按 RESET。
+5. 完成后点击 **Disconnect**，确认 BOOT 已松开，再按一下 **RESET/EN** 正常启动。
+6. 打开你自己部署的咖啡烘焙工作台，通过蓝牙选择 `Coffee-…` 设备，再按需进行 Wi-Fi 扫描、测试和保存；现场授权时按提示短按 BOOT。完整流程见[刷完后怎么连接工作台](#刷完后怎么连接工作台)。
+
+上述用户反馈目前只确认连接与辅助程序启动；尚未反馈四个文件写入完成或实机功能验收。虚拟演示固件的物理加热和风机输出仍禁用。
+
+### 首次安装或写入整套分区文件
+
+已备份旧固件和重要数据、并确认板型后，在 **Program** 区域用 **Add File** 添加文件，填写 **Flash Address**。当前参考布局如下；将来布局有变时以对应 Release 链接的源码版本文档为准，本地构建还可核对所选目录的 `flash-map.json`：
+
+| Flash Address | 同一镜像目录内的文件 | 用途           |
+| ------------- | -------------------- | -------------- |
+| `0x0`         | `bootloader.bin`     | 启动加载器     |
+| `0x8000`      | `partitions.bin`     | 分区表         |
+| `0xe000`      | `boot_app0.bin`      | 启动初始化数据 |
+| `0x10000`     | `application.bin`    | 应用固件       |
+
+1. 检查每一行的地址与文件，不要上传 `.elf`、ZIP 或 JSON，也不要在这四行之外再添加 `reference-merged.bin`。
+2. 当前官方页面的 **Flash Mode**、**Flash Frequency** 和 **Flash Size** 均可选择 `keep`，保留已构建镜像的头部配置。若明确手动填写，则当前参考烧录配置为 `dio`、`80m`、`16MB`。本地构建可核对 `build_metadata.json` 的 `image_flash_mode`、`image_flash_frequency`、`flash_size`；下载包不附带该文件，优先选择 `keep`。不要因 `platformio.ini` 中出现 `qio` 就覆盖启动镜像的 DIO 配置。
+3. **不勾选 Erase all，也不点击 Erase Flash**。正常写入仍会擦除所写文件覆盖的 Flash 扇区，但不需要额外擦除整片 Flash；使用上述分区文件不会主动写入 `0x9000–0xdfff` 的 NVS 区域。若旧固件采用其他布局，不能据此保证旧数据仍可使用。
+4. 点击 **Program**，保持供电及连接，等待所有文件写入完成、页面不再报告错误；若日志提供哈希验证结果，也应确认通过。
+5. 点击 **Disconnect**，确认 BOOT 已松开，再按一下 RESET/EN 或重新上电，从 Flash 正常启动。手动进入下载模式后，尤其需要这一步。
+
+### 已安装本项目时，只更新应用
+
+确认设备已有同一项目固件，且其分区布局与新 Release 一致后，可以只保留一行：**`application.bin` → `0x10000`**。应用地址仍须与对应版本文档一致，保持 `keep`，不勾选 **Erase all**，然后点击 **Program**。这会更新应用而保留其他分区；不能用这种方式首次安装，也不能用它处理分区布局变化。
+
+### 单文件合并镜像的用法
+
+若已备份数据，并接受覆盖合并镜像范围内的原有内容，可只添加一行：**`reference-merged.bin` → `0x0`**，保留镜像头部配置后点击 **Program**。不要同时选择独立分区文件。
+
+即使不勾选 **Erase all**，合并镜像的填充区域仍会覆盖 NVS，可能丢失已保存的 Wi-Fi 配置和设备热点身份；需要保留这些信息时优先使用独立分区文件或仅更新应用。`application.bin` 不是合并镜像，绝不能照此写到 `0x0`。
+
+### 刷完后怎么连接工作台
+
+断开刷机网页的串口连接并重启后，打开你自己部署的咖啡烘焙工作台，按[网页蓝牙配网说明](../../docs/bluetooth-connection.md)选择 `Coffee-…` 设备，再按需扫描、测试和保存 Wi-Fi。授权时按网页提示在设备旁**短按 BOOT**。也可使用设备热点配网页，具体见[配网与灯态](provisioning.md)。
+
+`s3_locked` 不会产生有效温度，`s3_virtual_demo` 提供虚拟温度；看到虚拟曲线不代表真实传感器或加热器已经验证。
+
+你可能还见过 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) 或 ESPHome Web。ESP Web Tools 的安装按钮需要对应项目提供固件清单；其官方演示安装的是 ESPHome，并非本项目固件。本项目当前发布的是本地选择文件用的 ZIP 和镜像，没有提供专用的一键网页安装清单，按上面的 ESP Tool 步骤即可。
+
+参考：[esptool-js 官方说明（浏览器支持与串口刷写）](https://github.com/espressif/esptool-js)、[ESP32-S3 官方下载模式说明](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/advanced-topics/boot-mode-selection.html)、[ESP Web Tools 固件清单说明](https://esphome.github.io/esp-web-tools/)。上述实物连接日志来自用户反馈；编写文档时未代用户执行擦除或刷写开发板。
 
 ## USB、热点与蓝牙配网
 
