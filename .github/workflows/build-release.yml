@@ -1,0 +1,159 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend checks and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: source
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - name: Package frontend
+        run: |
+          mkdir -p ../release
+          cd dist
+          zip -r ../../release/coffee-workbench-web.zip .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-release
+          path: release/coffee-workbench-web.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  firmware:
+    name: Firmware tests and reference images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: source/firmware
+        shell: bash
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Run native C++, setup page, and Python tests
+        run: python tools/test_native.py
+      - name: Cache pinned PlatformIO packages
+        uses: actions/cache@v6
+        with:
+          path: |
+            source/firmware/.tools/pio/platforms
+            source/firmware/.tools/pio/packages
+            source/firmware/.tools/pio/.cache
+          key: ${{ runner.os }}-${{ runner.arch }}-pio-6.2.0-${{ hashFiles('source/firmware/platformio.ini') }}
+      - name: Install PlatformIO in the release tool environment
+        run: |
+          python -m venv .tools/venv
+          .tools/venv/bin/python -m pip install platformio==6.2.0
+      - name: Clean-build and validate all three firmware environments
+        run: .tools/venv/bin/python tools/build_release.py
+      - name: Verify firmware checksums
+        working-directory: source/firmware/artifacts
+        run: sha256sum -c SHA256SUMS
+      - name: Package both reference images and flashing documentation
+        run: |
+          mkdir -p ../../release
+          zip -r ../../release/coffee-workbench-firmware.zip artifacts README.md docs
+      - name: Preserve build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-failure-logs
+          path: source/firmware/artifacts/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-release
+          path: release/coffee-workbench-firmware.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish automatic prerelease
+    needs: [frontend, firmware]
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "*-release"
+          path: release
+          merge-multiple: true
+      - name: Generate package checksums and release notes
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          cd release
+          sha256sum coffee-workbench-web.zip coffee-workbench-firmware.zip > SHA256SUMS
+          {
+            printf '自动构建 #%s\n\n' "$RUN_NUMBER"
+            printf '源码提交：`%s`\n\n' "$COMMIT_SHA"
+            printf '构建记录：%s\n\n' "$RUN_URL"
+            printf '%s\n' \
+              '- coffee-workbench-web.zip：前端静态文件，请通过 HTTP/HTTPS 服务访问。' \
+              '- coffee-workbench-firmware.zip：s3_locked 与 s3_virtual_demo 镜像、元数据、校验和及刷机文档。' \
+              '- SHA256SUMS：以上两个下载包的 SHA256 校验和。' \
+              '' \
+              '固件为未完成实机验证的参考构建，物理加热和风机输出禁用。刷机前阅读固件包中的 docs/build-and-flash.md，并核对 artifacts 下对应镜像的 flash-map.json；application.bin 不能写入地址 0。'
+          } > ../release-notes.md
+      - name: Create or update this build's release
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          tag="build-${RUN_NUMBER}-${COMMIT_SHA:0:7}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            # A rerun replaces assets only on its own immutable commit tag.
+            gh release upload "$tag" release/*.zip release/SHA256SUMS --clobber
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" release/*.zip release/SHA256SUMS \
+              --target "$COMMIT_SHA" \
+              --title "自动构建 #${RUN_NUMBER} (${COMMIT_SHA:0:7})" \
+              --notes-file release-notes.md \
+              --prerelease --latest=false
+          fi

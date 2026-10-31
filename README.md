@@ -21,6 +21,22 @@ npm run dev
 
 打开终端显示的本地地址。构建静态页面使用 `npm run build`，产物位于 `source/dist/`；综合检查使用 `npm run check`。
 
+## 自动构建与发布
+
+推送到 `main` 后，GitHub Actions 自动运行前端检查、固件原生测试，并编译固件；全部成功后创建一个预发布 Release。向 `main` 提交 PR 时也会构建检查，但不会发布。可在仓库的 Actions → Build and Release → Run workflow 中手动运行；只有选择 `main` 才会发布。
+
+前端使用 Node.js 24 和 `npm ci` / `npm run check`。固件使用 Python 3.12、PlatformIO 6.2.0 和 `platformio.ini` 中固定的 SDK，复用 `tools/build_release.py` 清理构建、校验输入、审计栈帧并收集镜像。`s3_network_compilecheck` 仅参与编译校验，不作为交付镜像。
+
+在 [Releases](https://github.com/JackHuang90/coffee-workbench/releases) 中下载：
+
+- `coffee-workbench-web.zip`：可部署到静态网站服务器的前端文件，解压后请通过 HTTP/HTTPS 访问。
+- `coffee-workbench-firmware.zip`：`artifacts/` 下包含 `s3_locked`、`s3_virtual_demo` 的分区镜像、合并镜像、元数据和校验文件；`docs/build-and-flash.md` 为刷机说明。
+- `SHA256SUMS`：两个下载包的校验和；固件包内 `artifacts/SHA256SUMS` 另外校验每个固件文件。
+
+自动标签格式为 `build-<构建编号>-<提交短哈希>`，指向实际构建的提交。每次推送生成独立版本，重新运行同一次构建会更新对应版本的附件。自动版本标记为预发布，正式版本可在 GitHub 上核验后手动发布。下载前端包不会自动部署网站。
+
+工作流使用 GitHub 自动提供的 `GITHUB_TOKEN`，无需添加个人令牌或其他 Secrets；发布任务单独申请 `contents: write` 权限。仓库或组织需允许 GitHub Actions 运行官方 `actions/*`，并允许该任务写入 Release。失败任务会阻止发布，可在 Actions 中查看日志。
+
 ## 文档
 
 - [开发说明](source/README.md)
