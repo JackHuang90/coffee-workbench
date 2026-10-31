@@ -1,26 +1,14 @@
-# Build, artifact verification, and conditional flash reference
+# 构建、镜像校验与刷机说明
 
-## What these images are
+## 镜像用途
 
-This is a **new rebuild**, not recovered firmware. `s3_locked` is permanently
-LOCKED: no temperature source, no physical output, no transport unlock.
-`s3_virtual_demo` runs a clearly labelled virtual thermal plant and local curve
-controller. **Both images have no physical heater/fan/DAC/SSR/RS485 binding.**
-Software tests and compilation do not qualify mains wiring or a roasting machine.
+这是重新构建的参考固件。`s3_locked` 固定处于 LOCKED 状态，温度无有效来源、物理输出禁用；`s3_virtual_demo` 使用明确标示的虚拟热模型，可验证本地曲线与虚拟温控。两种镜像都没有绑定真实加热器、风机、DAC、SSR 或 RS485。
 
-The configuration is an ESP32-S3-DevKitC-1 **reference** with overrides for 16 MB
-quad-I/O flash and 8 MB octal PSRAM (`qio_opi`). User-supplied board documentation identifies BOOT GPIO0 and a GPIO48 WS2812
-RGB LED; color order and memory still need a physical check (the photos mix
-N8R2 and N16R8 module examples). N16R8 describes memory, not USB wiring, carrier pins, power,
-flash voltage, sensor wiring, or a safe output circuit. Confirm the actual
-board/module and carrier documentation before flashing; preserve any existing
-firmware/calibration first. No physical board, Artisan application, or flash
-operation was used during this release.
+参考板型为 ESP32-S3-DevKitC-1，配置 16 MB Flash、8 MB 八线 PSRAM（`qio_opi`）、BOOT GPIO0 和 GPIO48 WS2812。用户提供的图片含不同内存型号示例，实际模组、载板、USB、引脚和颜色顺序仍需核对。N16R8 仅表示内存规格。本次仅生成和检查文件，没有连接开发板或执行刷机。
 
-## Reproduce (Linux/macOS shell)
+## 构建方法
 
-From `firmware/`, use project-local tools and temporary storage. Install only
-published official packages with normal checksum verification enabled:
+Linux/macOS 在 `firmware` 目录中使用独立工具环境，安装官方已发布且正常校验的包：
 
 ```sh
 mkdir -p .tools/tmp .tools/cache/pip .tools/pio
@@ -32,57 +20,45 @@ TMPDIR="$PWD/.tools/tmp" PLATFORMIO_CORE_DIR="$PWD/.tools/pio" \
 .tools/venv/bin/python tools/build_release.py
 ```
 
-`platformio.ini` pins official PlatformIO Espressif32 8.0.0 and resolved packages.
-The release script clean-builds all three targets before collecting images.
-The artifact manifest records exact framework, GCC, flags, source hashes and
-Git commit/dirty state; no claim of bit-for-bit reproducibility across different
-hosts or compiler timestamps is made. `s3_network_compilecheck` compiles provisioning with RGB disabled. All three
-current targets start a protected setup hotspot when no valid configuration is saved.
-It is not distributed as a release binary. Release collection refuses an existing
-`include/local_config.h` so credentials cannot leak into delivered images.
+本机 Windows 工具已放在 `D:\SDK\esp32_opt`。从仓库根目录执行：
 
-Official sources used for configuration:
-[PlatformIO Espressif32 releases](https://github.com/platformio/platform-espressif32/releases),
-[ESP32-S3 DevKitC-1 hardware reference](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1.html),
-[Espressif esptool basic commands](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/esptool/basic-commands.html).
+```powershell
+. ./toolchain.local/Activate.ps1
+Set-Location ./source/firmware
+pio run -e s3_locked -e s3_virtual_demo -e s3_network_compilecheck
+python tools/test_native.py
+$env:ROAST_TOOLS_DIR = 'D:\SDK\esp32_opt'
+python tools/build_release.py --collect-only
+```
 
-## Inspect offline before any device operation
+`--collect-only` 仅收集已成功构建的镜像，仍会检查源码与构建输入一致性。没有该参数时，发布工具先清理并重新构建三个环境。`ROAST_TOOLS_DIR` 用于指定外部工具目录；未设置时使用项目内 `.tools`。
+
+`platformio.ini` 固定 PlatformIO Espressif32 8.0.0、Arduino 3.3.12 和 GCC 等包版本。清单记录实际框架、编译器、参数、源码摘要及 Git 版本和工作区状态。不同主机或编译时间不保证生成逐字节一致的文件。`s3_network_compilecheck` 用于验证关闭 RGB 的构建，不作为发布镜像。
+
+发布收集拒绝 `include/local_config.h` 与内嵌 Wi-Fi 凭据定义。网站来源由用户配网时明确设置。参考来源：[PlatformIO 发布说明](https://github.com/platformio/platform-espressif32/releases)、[官方开发板说明](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1.html)、[esptool 命令](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/esptool/basic-commands.html)。
+
+## 刷机前校验
+
+`artifacts` 内的 `SHA256SUMS` 覆盖发布文件，可用以下命令核验：
 
 ```sh
-cd artifacts
 sha256sum -c SHA256SUMS
 ```
 
-Each release subdirectory contains `application.bin`, `application.elf`,
-`bootloader.bin`, `partitions.bin`, any additional boot image required by the
-framework, `reference-merged.bin`, `flash-map.json`, evaluated
-`build_metadata.json`, and offline `image-info`/merge logs. The top-level manifest
-has per-file sizes/SHA256 and a source-snapshot digest. `application.bin` is **not**
-a whole-chip image and must never be written at offset zero. Actual offsets are
-derived from the SDK build, not guessed from another ESP32 family.
+每种镜像单独包含 `application.bin`、`application.elf`、`bootloader.bin`、`partitions.bin`、SDK 所需的启动初始化文件、`reference-merged.bin`、`flash-map.json`、构建元数据、镜像检查日志及栈审计结果。顶层清单记录文件大小、SHA256 和源码快照摘要。
 
-## Conditional reference flash instructions — not executed
+**`application.bin` 是应用分区镜像，不能写到地址 0。** 实际偏移以该目录的 `flash-map.json` 为准，不能从其他 ESP32 型号推断。
 
-**Do not flash until the exact board/memory/USB configuration is confirmed.**
-Disconnect all actuator wiring and high-voltage power for a software-only bench
-check. A software image cannot make an unqualified electrical assembly safe.
-Choose exactly one directory, `s3_locked` (recommended first) OR
-`s3_virtual_demo` (virtual data only); never mix binaries between them.
+## 刷机参考步骤
 
-The generated `flash-map.json` is authoritative. For the evaluated reference
-configuration it is expected to be bootloader `0x0`, partition table `0x8000`,
-boot-app initialization `0xe000`, application `0x10000`. Inspect the released map
-and logs: use only the values actually recorded there. The framework uses a DIO
-boot image header for this QIO application configuration; retain its evaluated
-`image_flash_mode=dio` instead of overriding the image header to QIO.
+先确认具体模组、内存和 USB 配置，并备份设备已有固件与校准数据。软件台架检查时断开执行器和高压供电。选用同一目录中的整套文件；首次检查可选 `s3_locked`，需要虚拟数据时选 `s3_virtual_demo`，不要混用两种构建的文件。
 
-Using the SDK's esptool and an explicitly selected device port, after confirming
-those offsets, the multi-image reference command is:
+本参考配置实际评估的偏移为启动加载器 `0x0`、分区表 `0x8000`、启动初始化 `0xe000`、应用 `0x10000`，仍应先核对当前文件映射。应用使用 QIO 配置，但启动镜像头为 DIO，保留评估得到的 `image_flash_mode=dio`。
+
+以下命令仅供用户核对后执行，未替用户运行；将端口替换成已确认的开发板端口，并使用实际安装的 esptool 路径：
 
 ```sh
-# From firmware/, replace YOUR_CONFIRMED_PORT. No command was executed for you.
-.tools/pio/packages/tool-esptool/esptool \
-  --chip esp32s3 --port YOUR_CONFIRMED_PORT --baud 460800 \
+esptool --chip esp32s3 --port YOUR_CONFIRMED_PORT --baud 460800 \
   write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB \
   0x0 artifacts/s3_locked/bootloader.bin \
   0x8000 artifacts/s3_locked/partitions.bin \
@@ -90,88 +66,30 @@ those offsets, the multi-image reference command is:
   0x10000 artifacts/s3_locked/application.bin
 ```
 
-Alternatively, the **offline-generated** `reference-merged.bin` is a reference
-image beginning at offset `0x0`; verify its hash and merge log before use. The
-multi-image command is preferred because its component offsets are explicit.
-The merged image contains 0xFF padding between components: writing it may
-overwrite NVS or other data in those padded regions even without a whole-chip
-erase command. Treat it as an offline convenience artifact, not the default
-flashing path; preserve data from the confirmed board first.
-No instructions to erase the entire flash, alter eFuses, disable secure boot,
-change flash encryption, or bypass device protections are included. Existing
-secure-boot/encrypted devices need their owner's qualified signing/provisioning
-workflow; these unsigned reference images are not suitable for them.
+对于分区表未改变、且已经安装同一项目旧版固件的设备，可按当前 `flash-map.json` 仅更新应用分区，保留已保存的网络和热点身份；执行前仍需核对实际布局并备份。
 
-## USB and Wi-Fi provisioning
+`reference-merged.bin` 是从 `0x0` 起的离线合并镜像。合并文件的填充区域可能覆盖 NVS 等数据，因此优先采用上面的独立分区文件。不要因方便就擦除整片 Flash。现有安全启动或加密设备需要原有签名/配网流程，这些未签名参考文件不适用。
 
-USB uses ESP32-S3 native USB CDC. `HELLO` / `STATUS` expose the unchanged v1
-contract. `NETWORK` reports current connection and address without credentials.
-The explicit local-only `SETUP` command reports the device hotspot name/password,
-its active flag and actual setup URL; use this once on a development board to
-prepare its Wi-Fi label/QR. No router password is printed.
+## USB、热点与蓝牙配网
 
-All current targets enable provisioning by default. First boot opens a per-device
-WPA2 hotspot; configure Wi-Fi, optional static IPv4, and allowed website
-origins (HTTPS, or explicitly listed localhost/loopback/private-IPv4 HTTP) in its embedded page. Test first, then save. There is no credential
-compile step or automatic import of old `ROAST_WIFI_SSID` definitions. Network
-records live in `coffee-net`, identity in `coffee-id`; recovery does not erase
-all NVS. See [the complete flow](provisioning.md).
+USB 使用 ESP32-S3 原生 USB CDC，波特率 115200。`HELLO`、`STATUS` 保留 v1 协议；`NETWORK` 查询连接和地址，不含密码。显式本地 `SETUP` 查询返回设备热点名、密码、活动标记和实际配网页地址，可用于给开发板准备标签或二维码，不会打印路由器密码。
 
-The board defaults are BOOT GPIO0 low-active and WS2812 GPIO48, GRB order,
-brightness 12/255 (clamped to 32). Build flags can override `ROAST_BOOT_PIN`,
-`ROAST_RGB_PIN`, `ROAST_RGB_ORDER`, `ROAST_RGB_BRIGHTNESS`, or disable the LED with
-`ROAST_RGB_ENABLE=0`. These are source/compile choices, not measurements of the
-user's actual hardware. RESET/EN restarts normally; BOOT recovery is recognized
-only after firmware has observed a release, then a debounced five-second hold
-and release. Do not hold BOOT during power-on to enter provisioning.
+无有效配置时开启设备专属 WPA2 热点。也可直接用新版网页蓝牙配网：选择 `Coffee-…` → Wi-Fi 设置 → 请求授权 → 在设备旁短按 BOOT → 扫描或填写网络 → 测试 → 保存。需要同步更新网页和固件。支持 DHCP、固定 IPv4 和明确的网站来源；网络存于 `coffee-net`，热点身份存于 `coffee-id`，恢复不会清空其他 NVS 数据。详见[配网与灯态](provisioning.md)和[网页蓝牙说明](../../docs/bluetooth-connection.md)。
 
-HTTP GET status and OPTIONS accept only exact saved HTTPS or permitted local
-HTTP origins; HTTP hosts are localhost, 127/8, 10/8, 172.16/12 or 192.168/16
-strict dotted-decimal IPv4. Ports remain part of each configured origin. Command
-POST still rejects every Origin and additionally needs an explicitly configured
-`ROAST_HTTP_TOKEN` of at least 16 characters; the default empty token disables
-HTTP commands. No new control permission is supplied by the website allowlist.
-Modbus virtual control still requires USB authorization and a live lease.
-Changing network configuration or recovering via BOOT revokes existing sessions.
+蓝牙使用固定 Arduino SDK 自带的 NimBLE，无需额外蓝牙包。遥测特征仍只发送状态，新增独立配网特征要求加密写入和 120 秒现场 BOOT 授权。Just Works 配对保护传输但不验证设备身份。通知发送前检查加密和连接代际；密码不回显、不进入浏览器存储或日志；构建拒绝可能打印特征内容的 VERBOSE 日志级别。Artisan 继续使用 Wi-Fi/Modbus TCP 和原有授权。
 
-HTTP uses one connection, 64-byte nonblocking work steps, bounded headers and
-body, and a separate Flash-backed setup page sender. Scanning is asynchronous,
-connection tests last at most 30 seconds, reconnect waits grow to 30 seconds;
-ordinary reconnection never automatically opens the setup hotspot. Wi-Fi state
-is polled from the main loop; no callback changes controller or NVS state.
-Only explicit setup/reset writes NVS and those flows force outputs stopped first.
-SDK Wi-Fi/NVS/GPIO call duration and total task stack high-water mark still need
-measurement on the physical board; no native test proves those hardware timings.
+默认灯为 GPIO48、GRB、亮度 12/255，各通道硬上限 32；可通过 `ROAST_BOOT_PIN`、`ROAST_RGB_PIN`、`ROAST_RGB_ORDER`、`ROAST_RGB_BRIGHTNESS` 覆盖，或用 `ROAST_RGB_ENABLE=0` 关闭灯。RESET/EN 普通重启保留配置。BOOT 只有在启动后稳定释放，再按住五秒并松开时才恢复网络；短按用于网页发起的配网确认。不要在上电时按住 BOOT 进入配网。
 
-On Windows, an equivalent local build uses `.tools/venv/Scripts/python.exe -m
-platformio run -e s3_locked -e s3_virtual_demo -e s3_network_compilecheck`.
-Use `CXX` pointing to a modern C++17 compiler for `python tools/test_native.py`.
+HTTP 状态查询只允许明确保存的 HTTPS 或受限本机/内网 HTTP 来源，协议、主机和端口精确匹配。网站许可不授予控制权。温控 POST 继续拒绝带 Origin 的请求，且要求至少 16 字符的显式 `ROAST_HTTP_TOKEN`；默认空值关闭 HTTP 控制。Modbus 虚拟控制仍需 USB 授权和有效租约。修改网络或恢复配网会撤销现有控制会话。
 
-## Remaining physical qualification
+主循环优先运行控制 tick；网络和蓝牙任务分步有界执行，扫描异步，测试最长 30 秒，日常重连退避最多 30 秒且不自动开放热点。Wi-Fi、NVS 和控制状态由主循环修改。SDK 实际调用时长及任务栈余量仍需板上测量。
 
-Before useful real roasting: confirm the carrier; exact RTU device/registers and
-input type; independent temperature measurement; validated SSR/current-loop
-conversion; external DAC for 0–4.5 V ESC if applicable; safe fan/brake semantics;
-independent overtemperature/airflow/cutoff chain; sensor failure and brownout
-behavior; actual actuator feedback; and one sole heater PID owner. Neither this
-release nor a protocol write can authorize or activate such a profile.
+## 硬件验证与溯源边界
 
-If task-watchdog initialization/configuration or refresh fails at runtime, all
-mutating USB/HTTP commands are rejected with `watchdog_unavailable` and the
-controller is held stopped. Hardware watchdog timing itself is not bench-tested.
+真实烘焙仍需确认载板、仪表和寄存器、独立温度测量、SSR/电流环或 DAC 转换、风机和制动语义、独立过温/风量/断电链、传感器故障及欠压响应、执行器反馈与唯一加热 PID 控制权。这些参考镜像没有授权或启用真实执行器。
 
-### Provenance interpretation
+任务看门狗初始化或刷新失败时，改变状态的 USB/HTTP 命令返回 `watchdog_unavailable`，控制器保持停止。硬件看门狗时序尚未台架测量。
 
-The upstream prebuilt Arduino library supplies an ESP application-description
-label/date such as `arduino-lib-builder`. Those fields describe upstream library
-metadata, **not this rebuild’s source revision or build time**. Use the release
-manifest’s Git commit, build-input/source SHA256, compiler flags and actual ELF
-hash for this project. Runtime telemetry and directory names distinguish LOCKED
-from VIRTUAL_DEMO.
+SDK 预编译库内类似 `arduino-lib-builder` 的应用标签和日期描述的是上游库，不能代表本项目源码版本或构建时间。应以发布清单的 Git 版本、源码和构建输入 SHA256、实际 ELF 摘要、参数及运行时 LOCKED/VIRTUAL_DEMO 标记为准。
 
-Release collection rejects stale source/build-input mismatches and actual Xtensa
-application-object function frames larger than 2048 bytes. Each image includes a
-`stack-audit.json` from disassembled object code. This is not a proof of total
-call-chain, SDK/interrupt stack usage, or measured on-board stack high-water mark.
-
-The 2026-10-30 Web BLE build uses the BLE library already bundled in the pinned Arduino 3.3.12 SDK; no external Bluetooth package is required. All three environments compile the same notify-only adapter. The SDK selects NimBLE and enables software Wi-Fi/BLE coexistence. Release manifests include `web_ble` with the service/status UUIDs and `hardware_tested:false`. BLE is for webpage telemetry only; Artisan's Wi-Fi setup and authorization remain unchanged. No board flash or radio test is part of generating this package.
+发布收集拒绝源码/输入不一致的旧镜像，以及实际 Xtensa 应用对象中超过 2048 字节的单函数栈帧。`stack-audit.json` 来自反汇编结果，不证明完整调用链、SDK/中断用栈或板上测得的最高栈占用。无线配对、Wi-Fi 连接与 RGB 实际颜色仍需实体设备验收。

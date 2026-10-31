@@ -34,6 +34,7 @@ int main(){
  assert(!button.update(false,11261));assert(button.update(false,11321));assert(!button.update(false,11400));
  ResetButton bounce;bounce.update(false,0);bounce.update(false,60);bounce.update(true,100);bounce.update(false,120);bounce.update(false,200);assert(!bounce.armed());
  ResetButton wrapping;wrapping.update(false,UINT32_MAX-200);wrapping.update(false,UINT32_MAX-140);wrapping.update(true,UINT32_MAX-100);wrapping.update(true,UINT32_MAX-40);wrapping.update(true,4960);assert(wrapping.armed());assert(!wrapping.update(false,4961));assert(wrapping.update(false,5021));
+ ResetButton shortButton;shortButton.update(false,0);shortButton.update(false,50);shortButton.update(true,100);shortButton.update(true,150);shortButton.update(false,200);shortButton.update(false,250);assert(shortButton.takeShortPress());assert(!shortButton.takeShortPress());assert(!button.takeShortPress());assert(!bounce.takeShortPress());
  Machine m;m.begin(false,0);assert(m.state()==State::Setup);assert(m.tick(1,false)==Action::None);
  m.test(10);assert(m.tick(10,false)==Action::ConnectCandidate);assert(m.tick(30009,false)==Action::None);assert(m.tick(30010,false)==Action::Disconnect);assert(m.state()==State::Failed);assert(!m.canSave());
  m.test(31000);assert(m.tick(31000,false)==Action::ConnectCandidate);m.tick(32000,true);assert(m.canSave());m.saved(false,32000);assert(m.canSave()&&m.state()==State::SaveFailed);m.saved(true,33000);assert(m.state()==State::Saved);assert(m.tick(62999,true)==Action::None);assert(m.tick(63000,true)==Action::CloseAp);

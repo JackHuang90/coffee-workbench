@@ -12,8 +12,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-SOURCES = ["core", "protocol", "modbus", "rtu", "http", "provisioning", "portal", "ble"]
-SUITES = ["core", "protocol", "transports", "http", "http_integration", "reply_drain", "artisan", "provisioning", "portal", "cors", "local_origins", "ble", "ble_adapter"]
+SOURCES = ["core", "protocol", "modbus", "rtu", "http", "provisioning", "portal", "ble", "ble_setup", "indicator"]
+SUITES = ["core", "protocol", "transports", "http", "http_integration", "reply_drain", "artisan", "provisioning", "portal", "cors", "local_origins", "ble", "ble_setup", "ble_adapter", "indicator"]
 
 
 def main():

@@ -3,6 +3,7 @@ import type { DeviceClientOptions, DeviceSnapshot } from "./device";
 import type { DeviceClient } from "./direct-device";
 import { validateDeviceStatus } from "./device-schema.mjs";
 import type { DeviceStatus } from "./device-schema.mjs";
+import { BleProvisioningClient } from "./ble-provisioning";
 import { BleFrameAssembler } from "./ble-framing";
 export const BLE_SERVICE_UUID = "b4e7a001-9d56-4f1b-a6e0-7d31c2f84590";
 export const BLE_STATUS_UUID = "b4e7a002-9d56-4f1b-a6e0-7d31c2f84590";
@@ -139,6 +140,13 @@ export class BleDeviceClient implements DeviceClient {
   private latestReceivedAt: number | null = null;
   /** 已释放时拒绝更新页面和打开选择器。 */
   private disposed = false;
+  private service?: BleService;
+  private setupClient?: BleProvisioningClient;
+  /** Discover setup characteristics only after an explicit setup action. */
+  get provisioning(): BleProvisioningClient | undefined {
+    if (!this.service || !this.subscribed) return undefined;
+    return (this.setupClient ??= new BleProvisioningClient(this.service));
+  }
 
   /** 功能：初始化能力与生命周期监听，不搜索设备。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   constructor(options: DeviceClientOptions = {}) {
@@ -191,6 +199,9 @@ export class BleDeviceClient implements DeviceClient {
   }
   /** 功能：撤销当前意图，先移除监听再断开，并清空所有有界计时。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   private cancel(): void {
+    this.setupClient?.dispose();
+    this.setupClient = undefined;
+    this.service = undefined;
     this.epoch++;
     clearTimeout(this.setupTimer);
     clearTimeout(this.frameTimer);
@@ -363,6 +374,7 @@ export class BleDeviceClient implements DeviceClient {
           this.releaseLate(device, owner);
           return;
         }
+        this.service = service;
         this.subscribed = true;
         this.publishLatest();
         await Promise.race([firstFrame, interrupted]);

@@ -112,6 +112,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("read-only browser BLE", () => {
+  it("lazy setup discovery shares GATT and legacy absence preserves telemetry", async () => {
+    const r = radio(),
+      c = client();
+    r.service.getCharacteristic.mockImplementation(async (uuid?: string) => {
+      if (uuid !== BLE_STATUS_UUID) throw new Error("NotFoundError");
+      return r.characteristic;
+    });
+    const pending = c.connect({ ip: "" });
+    await settle();
+    r.sample();
+    await pending;
+    expect(r.service.getCharacteristic).toHaveBeenCalledTimes(1);
+    await expect(c.provisioning!.request("state")).rejects.toThrow("升级");
+    expect(r.gatt.disconnect).not.toHaveBeenCalled();
+    r.sample({ uptime_ms: 1100, bt: 125 }, 2);
+    expect(c.snapshot.status?.bt).toBe(125);
+    expect(r.gatt.connect).toHaveBeenCalledTimes(1);
+    await c.disconnect();
+    expect(c.provisioning).toBeUndefined();
+  });
+
   it("never opens a chooser on construction/discovery and calls it synchronously on explicit connect", async () => {
     const r = radio(),
       c = client();

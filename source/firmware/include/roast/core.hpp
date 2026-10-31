@@ -47,6 +47,7 @@ class Controller {
  void transportLost(uint32_t now);
  void forceStop(uint32_t now,const char* reason="stopped");
  const Curve& curve()const{return active_;}
+ bool receivingCurve()const{return stagingOpen_;}
  private:
  OutputPort& output_; Curve active_{},staging_{}; size_t expected_=0; uint32_t expectedHash_=0;
  bool stagingOpen_=false,haveTick_=false,pausedArm_=false,autoRevoked_=false; State state_=kDemoBuild?State::Idle:State::Locked;

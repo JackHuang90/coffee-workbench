@@ -5,6 +5,7 @@ coverage/
 .vite/
 *.tsbuildinfo
 .sites-runtime/
+superpowers/
 
 # Local environment files; keep shareable configuration examples
 .env

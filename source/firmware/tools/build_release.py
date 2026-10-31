@@ -22,7 +22,7 @@ from stack_audit import audit
 # 固件项目根目录，作为命令工作目录和溯源路径的基准。
 ROOT = Path(__file__).resolve().parents[1]
 # 项目独立工具环境和 SDK 缓存目录。
-TOOLS = ROOT / ".tools"
+TOOLS = Path(os.environ.get("ROAST_TOOLS_DIR", ROOT / ".tools")).resolve()
 # 生成的参考镜像、日志和校验清单目录。
 ARTIFACTS = ROOT / "artifacts"
 # 允许发布的锁定与虚拟演示构建；不包含仅编译验证环境。
@@ -141,17 +141,25 @@ def main():
         "physical_outputs_enabled": False,
         "board_confirmed": False,
         "hardware_tested": False,
-        "network_configuration": "FIRST_BOOT_SOFTAP_PROVISIONING",
+        "network_configuration": "FIRST_BOOT_SOFTAP_AND_ENCRYPTED_BLE_PROVISIONING",
         "web_ble": {
             "enabled": True,
-            "read_only": True,
+            "read_only": False,
+            "telemetry_read_only": True,
+            "wifi_provisioning": True,
+            "provisioning_requires_encryption": True,
+            "provisioning_requires_boot_confirmation": True,
+            "provisioning_window_seconds": 120,
             "stack": "BUNDLED_ARDUINO_3.3.12_NIMBLE",
             "service_uuid": "b4e7a001-9d56-4f1b-a6e0-7d31c2f84590",
             "status_uuid": "b4e7a002-9d56-4f1b-a6e0-7d31c2f84590",
+            "setup_write_uuid": "b4e7a003-9d56-4f1b-a6e0-7d31c2f84590",
+            "setup_notify_uuid": "b4e7a004-9d56-4f1b-a6e0-7d31c2f84590",
             "hardware_tested": False,
         },
         "credential_policy": "NO_LOCAL_CONFIG_OR_WIFI_CREDENTIAL_DEFINES",
-        "warning": "First-boot hotspot provisioning; reference N16R8 configuration only. Not hardware-tested or a qualified roasting controller.",
+        "rgb_status_indicator": {"enabled": True, "pin": 48, "order": "GRB", "hardware_tested": False},
+        "warning": "Hotspot and encrypted BLE provisioning with BOOT confirmation; reference N16R8 configuration only. Not hardware-tested or a qualified roasting controller.",
         "git_commit": run(["git", "rev-parse", "HEAD"]).strip(),
         "git_status": run(["git", "status", "--porcelain"]).splitlines(),
         "platformio": run([*pio, "--version"]).strip(),

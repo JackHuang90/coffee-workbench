@@ -10,6 +10,7 @@
  * - 2026-10-30：新增网页 BLE 显式选择和取消、独立安全上下文提示及设备名称展示；Artisan 保留 Wi-Fi。
  */
 import { computed, ref, watch } from "vue";
+import BleProvisioningPanel from "./BleProvisioningPanel.vue";
 import { defaultDeviceTransport } from "../core/device";
 import { isBleSupported } from "../core/ble-device";
 import { isAllowedDevicePageOrigin } from "../core/device-origin";
@@ -165,6 +166,11 @@ const temperature = (v: number | null | undefined) => (v == null ? "—" : `${v.
         改用 Wi-Fi 直连
       </button>
     </div>
+    <BleProvisioningPanel
+      v-if="transport === 'ble' && snapshot.state === 'connected' && client.provisioning"
+      :client="client.provisioning"
+      :connected="snapshot.state === 'connected'"
+    />
     <template v-if="transport === 'bridge' && !bridgeHere">
       <h3>先在同一台电脑启动本地桥</h3>
       <ol class="setup-steps">
@@ -240,7 +246,7 @@ const temperature = (v: number | null | undefined) => (v == null ? "—" : `${v.
       <p class="small-note">
         {{
           transport === "ble"
-            ? "蓝牙仅查看当前设备状态，不发送控制指令。"
+            ? "蓝牙遥测只读；Wi-Fi 设置需现场短按 BOOT 授权。"
             : "当前固件状态接口只读、不需要令牌，所以此处不收集密码。"
         }}连接后切到后台/关闭页面会断开；返回页面不会自动重连。
       </p>
@@ -359,11 +365,6 @@ const temperature = (v: number | null | undefined) => (v == null ? "—" : `${v.
         秒，紫灯快闪后松开。此操作清除网络和网站来源设置，保留设备热点身份。RESET
         只重启并保留配置；不要按住 BOOT 上电或按 RESET。
       </p>
-      <p>
-        RGB 灯（GPIO48
-        WS2812）：蓝色慢闪＝等待配网；黄色闪烁＝连接路由器；绿色低亮＝已取得地址；红色间歇闪烁＝连接失败；紫色快闪＝松开
-        BOOT 确认恢复。灯态仅表示网络状态，板卡实际颜色仍需核对。
-      </p>
     </details>
     <details
       v-if="transport === 'direct'"
@@ -391,6 +392,32 @@ const temperature = (v: number | null | undefined) => (v == null ? "—" : `${v.
       <p>无需关闭浏览器安全检查，也不要映射路由器端口或使用公网代理。</p>
     </details>
     <details class="connection-help">
+      <summary>RGB 工作状态（按优先级显示）</summary>
+      <p>
+        GPIO48
+        WS2812，低亮度。单灯优先显示下列较高项；实际颜色顺序需在板卡核对。灯态仅反映固件已有状态，网页本地仿真不会改变设备灯态。
+      </p>
+      <ol>
+        <li>故障：红色三闪。</li>
+        <li>BOOT 恢复待松开：紫色快闪。</li>
+        <li>配网确认：紫黄交替。</li>
+        <li>启动：白色呼吸，最多 1.5 秒。</li>
+        <li>曲线接收：紫色快闪。</li>
+        <li>设备虚拟温控：橙色呼吸。</li>
+        <li>曲线已装载：紫色双闪。</li>
+        <li>最近传输：青色短闪。</li>
+        <li>配网已授权：紫色单闪。</li>
+        <li>蓝牙已订阅：青色常亮；已连接未订阅：青色快闪。</li>
+        <li>Wi-Fi 连接中：黄色快闪。</li>
+        <li>已配网离线：黄色双闪。</li>
+        <li>Wi-Fi 在线：绿色常亮。</li>
+        <li>未配网：蓝色慢闪。</li>
+      </ol>
+      <p>
+        LOCKED / VIRTUAL_DEMO 不代表物理输出成功；配网测试会停止设备虚拟会话，保存前必须测试成功。
+      </p>
+    </details>
+    <details class="connection-help">
       <summary>Artisan 与设备状态</summary>
       <p>
         Artisan 读取：MODBUS TCP，设备 IP，端口 502，单元 1；Input 1（ET）寄存器 1、Input
@@ -399,8 +426,8 @@ const temperature = (v: number | null | undefined) => (v == null ? "—" : `${v.
       </p>
       <p>
         LOCKED / VIRTUAL_DEMO
-        均未绑定物理执行器；虚拟演示不等于实机安全认证。网页只读取状态，不配置路由器、不刷机，也不更改
-        Artisan 控制会话。
+        均未绑定物理执行器；虚拟演示不等于实机安全认证。网页可通过现场确认的蓝牙会话配置
+        Wi-Fi，不刷机，也不更改 Artisan 控制会话。
       </p>
     </details>
   </div>

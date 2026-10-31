@@ -3,14 +3,15 @@
 #include "ble_sdk_stub.hpp"
 #include "roast/esp_ble.hpp"
 #include "roast/core.hpp"
+#include "roast/ble_setup.hpp"
 #include <iostream>
 /** 功能：单步调度中继并执行一个主机事件。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 void pump(){try{ble_test::relay(nullptr);}catch(const RelayIdle&){}if(ble_test::queuedEvent){auto* event=ble_test::queuedEvent;ble_test::queuedEvent=nullptr;event->callback(event);}}
 /** 功能：运行适配器状态路径，使用真实Controller及编码器。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 int main(){
- assert(roast::ble::begin());assert(ble_test::properties==0x10&&ble_test::permissions==0);assert(ble_test::deviceName=="Coffee-123456");
+ assert(roast::ble::begin());assert(!roast::ble::linkState().connected);assert(BLEDevice::server.service.setupWrite.properties&(BLECharacteristic::PROPERTY_WRITE_ENC));assert(ble_test::properties==0x10&&ble_test::permissions==0);assert(ble_test::deviceName=="Coffee-123456");
  roast::VirtualPlant plant;roast::Controller controller(plant,77);controller.tick(0,plant.step(0));
- auto& server=BLEDevice::server;auto& characteristic=server.service.characteristic;ble_gap_conn_desc peer{7},extra{8};
+ auto& server=BLEDevice::server;auto& characteristic=server.service.characteristic;ble_gap_conn_desc peer{7,{}},extra{8,{}};
  server.callbacks->onConnect(&server,&peer);server.callbacks->onConnect(&server,&extra);assert(ble_test::disconnects==1);
  roast::ble::tick(controller,0);pump();assert(ble_test::notifications.empty());
  characteristic.callbacks->onSubscribe(&characteristic,&peer,1);
@@ -27,5 +28,27 @@ int main(){
  server.callbacks->onDisconnect(&server,&peer);server.callbacks->onConnect(&server,&peer);
  ble_test::now=2000;controller.tick(2000,plant.step(2000));roast::ble::tick(controller,2000);pump();assert(ble_test::notifications.size()==4);
  characteristic.callbacks->onSubscribe(&characteristic,&peer,1);server.callbacks->onMtuChanged(&server,&peer,247);roast::ble::tick(controller,2000);pump();assert(ble_test::notifications.size()==5&&ble_test::notifications.back().size()==244);
+ characteristic.callbacks->onSubscribe(&characteristic,&peer,0);ble_test::now=2010;roast::ble::tick(controller,2010);pump();
+ auto& setupWrite=server.service.setupWrite;auto& setupNotify=server.service.setupNotify;
+ setupNotify.callbacks->onSubscribe(&setupNotify,&peer,1);
+ uint8_t command[32];const char* request="12\nscan\n";const size_t commandSize=roast::ble::setupFrame(12,8,0,reinterpret_cast<const uint8_t*>(request),8,command,sizeof(command));
+ setupWrite.value.assign(reinterpret_cast<char*>(command),commandSize);const auto before=ble_test::notifications.size();
+ setupWrite.callbacks->onWrite(&setupWrite,&peer);ble_test::now=2020;roast::ble::tick(controller,2020);pump();assert(ble_test::notifications.size()==before);
+ peer.sec_state.encrypted=true;setupWrite.callbacks->onWrite(&setupWrite,&peer);ble_test::now=2030;roast::ble::tick(controller,2030);pump();assert(ble_test::notifications.size()==before+1);
+ roast::ble::SetupAssembler assembled;const auto& response=ble_test::notifications.back();assert(assembled.push(response.data(),response.size(),2030));assert(std::strstr(assembled.data(),"\"id\":12"));assert(std::strstr(assembled.data(),"\"code\":403"));assert(!std::strstr(assembled.data(),"password"));
+ ble_test::now=2040;roast::ble::tick(controller,2040);pump();assert(ble_test::notifications.size()==before+1);
+ setupWrite.callbacks->onWrite(&setupWrite,&peer);ble_test::encrypted=false;ble_test::now=2050;roast::ble::tick(controller,2050);pump();assert(ble_test::notifications.size()==before+1);
+ ble_test::encrypted=true;server.callbacks->onDisconnect(&server,&peer);ble_test::now=2060;roast::ble::tick(controller,2060);pump();assert(!roast::ble::linkState().setupAuthorized);assert(!roast::ble::linkState().connected);
+ // A congested setup response must not starve an in-progress MTU23 telemetry frame.
+ server.callbacks->onConnect(&server,&peer);characteristic.callbacks->onSubscribe(&characteristic,&peer,1);setupNotify.callbacks->onSubscribe(&setupNotify,&peer,1);
+ ble_test::now=3000;roast::ble::tick(controller,3000);pump();const auto telemetryStart=ble_test::notificationHandles.size();const auto disconnectStart=ble_test::disconnects;
+ setupWrite.callbacks->onWrite(&setupWrite,&peer);ble_test::setupNotifyResult=BLE_HS_ENOMEM;
+ for(uint32_t now=3005;now<=4700;now+=5){ble_test::now=now;roast::ble::tick(controller,now);pump();}
+ size_t telemetryProgress=0;for(size_t i=telemetryStart;i<ble_test::notificationHandles.size();++i)if(ble_test::notificationHandles[i]==42)++telemetryProgress;
+ assert(telemetryProgress>1);assert(ble_test::disconnects==disconnectStart);
+ roast::ble::SetupAssembler concurrentTelemetry;bool telemetryComplete=false;for(size_t i=telemetryStart-1;i<ble_test::notifications.size()&&!telemetryComplete;++i)if(ble_test::notificationHandles[i]==42){const auto& fragment=ble_test::notifications[i];telemetryComplete=concurrentTelemetry.push(fragment.data(),fragment.size(),4700);}assert(telemetryComplete);
+ ble_test::setupNotifyResult=0;
+ for(uint32_t now=4705;now<=5000;now+=5){ble_test::now=now;roast::ble::tick(controller,now);pump();}
+ assert(ble_test::disconnects==disconnectStart);bool setupDelivered=false;for(size_t i=telemetryStart;i<ble_test::notificationHandles.size();++i)if(ble_test::notificationHandles[i]==44)setupDelivered=true;assert(setupDelivered);
  std::cout<<"BLE adapter lifecycle, queue and congestion passed\n";
 }

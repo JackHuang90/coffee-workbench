@@ -15,6 +15,7 @@
 #include "roast/modbus.hpp"
 #include "roast/reply_drain.hpp"
 #include "roast/esp_ble.hpp"
+#include "roast/esp_indicator.hpp"
 #if __has_include("local_config.h")
 #include "local_config.h"
 #endif
@@ -38,6 +39,7 @@ roast::Controller* controller=nullptr;
 roast::LineFramer usbFrame;
 char usbTx[roast::kResponseSize+2]{};size_t usbSize=0,usbSent=0;
 bool watchdogAdded=false;
+roast::indicator::EspIndicator rgb;
 size_t networkStatusJson(char* out,size_t capacity);
 #if ROAST_WIFI_ENABLE
 roast::net::EspProvisioning provisioning;
@@ -184,17 +186,43 @@ size_t networkStatusJson(char* out,size_t capacity){
  const int n=std::snprintf(out,capacity,"{\"v\":1,\"kind\":\"network\",\"wifi_compiled\":%s,\"configured\":%s,\"connected\":%s,\"local_ip\":%s,\"http_port\":80,\"modbus_port\":502,\"physical_enabled\":false}",ROAST_WIFI_ENABLE?"true":"false",configured?"true":"false",connected?"true":"false",ip);
  if(n<0||static_cast<size_t>(n)>=capacity){if(capacity)out[0]=0;return 0;}return static_cast<size_t>(n);
 }
+// Main-loop snapshots only: indicator never changes control or network state.
+void indicatorWork(uint32_t now){
+ const auto snapshot=controller->snapshot(now);
+ const auto link=roast::ble::linkState();
+ roast::indicator::Inputs inputs;
+ inputs.boot=true;
+ inputs.error=!watchdogAdded||snapshot.state==roast::State::Fault;
+ inputs.bleConnected=link.connected;inputs.bleSubscribed=link.subscribed;
+ inputs.setupPending=link.setupPending;inputs.setupAuthorized=link.setupAuthorized;
+ inputs.curveReceiving=controller->receivingCurve();
+ inputs.curveLoaded=controller->curve().count>0;
+ inputs.simulationRunning=roast::kDemoBuild&&(snapshot.state==roast::State::Running||snapshot.state==roast::State::ArtisanPower||snapshot.state==roast::State::ArtisanSv||snapshot.state==roast::State::Manual);
+ inputs.dataTransfer=link.lastActivityAt&&uint32_t(now-link.lastActivityAt)<200;
+#if ROAST_WIFI_ENABLE
+ inputs.reset=provisioning.resetArmed();
+ inputs.error=inputs.error||provisioning.hasError();
+ inputs.configured=provisioning.configured();
+ inputs.wifiConnected=WiFi.status()==WL_CONNECTED;
+ inputs.wifiConnecting=provisioning.state()==roast::net::State::Connecting||provisioning.state()==roast::net::State::Testing;
+#endif
+ rgb.tick(inputs,now);
+}
 }
 /** 功能：默认启动配网和只读BLE并保持空/虚拟输出。首次编写日期：未知（历史代码）；变更日期：2026-10-30；修改记录：2026-10-29：默认启动持久配网并保持空/虚拟输出。2026-10-30：无线启动在看门狗及控制计时前完成。 */
 void setup(){
+ rgb.begin(millis());
+ roast::indicator::Inputs starting;starting.boot=true;rgb.tick(starting,millis());
  Serial.begin(115200); // Native USB CDC. No UART/RS485 or actuator pins are initialized.
  Serial.setTxTimeoutMs(0); // Never block the control scheduler on host backpressure.
  uint32_t session=esp_random();if(!session)session=1;
  roast::OutputPort& port=roast::kDemoBuild?static_cast<roast::OutputPort&>(plant):static_cast<roast::OutputPort&>(nullOutput);
  controller=new(controllerStorage) roast::Controller(port,session);
  roast::ble::begin(); // Failure leaves Wi-Fi/USB available; no reboot or control authorization.
+ rgb.tick(starting,millis());
 #if ROAST_WIFI_ENABLE
  provisioning.begin(*controller,millis());
+ roast::ble::attachProvisioning(&provisioning);
 #endif
  esp_task_wdt_config_t wdt{};wdt.timeout_ms=2000;wdt.idle_core_mask=0;wdt.trigger_panic=true;
  esp_err_t configured=esp_task_wdt_init(&wdt);
@@ -215,5 +243,6 @@ void loop(){
  networkWork(now);
 #endif
  roast::ble::tick(*controller,now);
+ indicatorWork(now);
  yield(); // No delay loops or waits for USB/Wi-Fi connection.
 }

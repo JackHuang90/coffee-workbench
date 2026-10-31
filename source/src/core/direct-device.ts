@@ -34,6 +34,8 @@ const messages: Record<string, string> = {
  * - 2026-10-29：首次编写，沿用既有桥接方法签名。
  */
 export interface DeviceClient {
+  /** Optional setup capability sharing the active BLE connection. */
+  readonly provisioning?: import("./ble-provisioning").BleProvisioningClient;
   /** 最新快照；调用方不得通过修改它控制设备。 */
   readonly snapshot: DeviceSnapshot;
   /** 功能：检查当前页面的连接方式是否可用。首次编写日期：2026-10-29。变更日期：2026-10-29。修改记录：2026-10-29 首次编写。 */

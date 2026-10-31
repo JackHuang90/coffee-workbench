@@ -77,7 +77,7 @@ bool ResetButton::update(bool pressed,uint32_t now){
  if(pressed!=raw_){raw_=pressed;changed_=now;}
  if(static_cast<uint32_t>(now-changed_)>=50){
   if(!released_&&!raw_){released_=true;stable_=false;}
-  else if(released_&&stable_!=raw_){stable_=raw_;if(stable_){pressed_=now;armed_=false;}else {const bool confirmed=armed_;armed_=false;return confirmed;}}
+  else if(released_&&stable_!=raw_){stable_=raw_;if(stable_){pressed_=now;armed_=false;}else {const bool confirmed=armed_;shortPress_=!confirmed&&uint32_t(now-pressed_)>=50&&uint32_t(now-pressed_)<5000;armed_=false;return confirmed;}}
  }
  if(released_&&stable_&&raw_&&static_cast<uint32_t>(now-pressed_)>=5000)armed_=true;
  return false;

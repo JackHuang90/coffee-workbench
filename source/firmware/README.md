@@ -20,6 +20,8 @@
 
 ## 从哪里开始
 
+2026-10-31 新增：网页蓝牙配网（扫描→测试→保存，设备短按 BOOT 确认）、独立加密配网通道，以及启动/网络/蓝牙/曲线传输/虚拟温控 RGB 灯态。需同步更新网页和固件，见[网页操作](../docs/bluetooth-connection.md)与[灯态表](docs/provisioning.md#恢复配网和灯态)。
+
 1. [首次配网和恢复](docs/provisioning.md)：设备热点、允许的网站、BOOT 与 RGB 说明。
 2. [构建、校验与有条件烧录说明](docs/build-and-flash.md)：先确认真实载板，不要将application.bin当作0地址全量固件。
 3. [协议与状态机](docs/protocol.md)：USB `HELLO`/`STATUS`，本地控制时序、owner及超时；ACK不是物理动作确认。

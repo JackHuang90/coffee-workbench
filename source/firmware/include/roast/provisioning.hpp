@@ -51,7 +51,9 @@ class ResetButton {
  bool update(bool pressed,uint32_t now);
  /** 功能：报告等待松开确认状态。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
  bool armed()const{return armed_;}
+ bool takeShortPress(){const bool value=shortPress_;shortPress_=false;return value;}
  private:
+ bool shortPress_=false;
  bool initial_=true; // 尚未记录首个输入。
  bool raw_=true; // 当前未消抖输入。
  bool stable_=true; // 已消抖的输入。

@@ -4,7 +4,6 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <WiFiUdp.h>
-#include <esp32-hal-rmt.h>
 #include "roast/provisioning.hpp"
 #include "roast/portal.hpp"
 #include "roast/core.hpp"
@@ -31,13 +30,17 @@ class EspProvisioning {
  bool apActive()const{return ap_;}
  /** 功能：读取配置变更代数以关闭旧连接。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
  uint32_t epoch()const{return epoch_;}
+ State state()const{return machine_.state();}
+ bool resetArmed()const{return button_.armed();}
+ bool hasError()const{return error_[0]||machine_.state()==State::Failed||machine_.state()==State::SaveFailed;}
+ bool takeSetupConfirmation(){return button_.takeShortPress();}
+ int setupAction(const char* op,const char* form,uint32_t now,const char*& body);
+ const char* bleState(uint32_t now,bool authorized,bool pending,uint32_t remaining);
  private:
  Controller* controller_=nullptr; // 仅主循环访问，用于配置时撤销控制。
  Preferences store_; // 本应用网络记录命名空间。
  WiFiUDP dns_; // 只绑定热点地址，每轮处理最多一个DNS报文。
  uint8_t dnsPacket_[512]{}; // 有界DNS收发工作区。
- rmt_data_t ledData_[24]{}; // 异步WS2812发送完成前保持稳定的缓冲。
- bool ledReady_=false; // 仅在setup中初始化一次RMT，不在tick中等待。
  Config committed_{}; // 最后成功提交的网络配置。
  Config candidate_{}; // 只在显式测试成功后允许提交的候选配置。
  const Config* pendingConnection_=nullptr; // 等待旧STA异步断开后才配置的新连接。
@@ -62,7 +65,6 @@ class EspProvisioning {
  uint32_t migrationGateway_=0; // 非零时表示十秒后切换的热点地址。
  bool deferTest_=false; // 静态网段迁移完成前暂停候选测试。
  int slot_=-1; // 当前有效NVS槽。
- Light lastLight_=Light::Off; // 上次发送的RGB颜色，避免重复驱动。
  /** 功能：生成并持久化设备独立热点密码。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
  bool identity();
  /** 功能：写入另一个NVS槽并回读确认，失败保留旧记录。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
@@ -80,11 +82,10 @@ class EspProvisioning {
  /** 功能：逻辑清除本应用网络配置，保留设备身份和业务数据。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
  void resetNetwork(uint32_t);
  /** 功能：生成无密码的门户状态及最多12条扫描结果。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
- void stateJson(uint32_t);
+ void stateJson(uint32_t,bool ble=false,bool authorized=true,bool pending=false,uint32_t remaining=0);
  /** 功能：处理最多一个有界热点DNS查询。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
  void dnsWork();
  /** 功能：上一帧完成后异步发送WS2812颜色，无无限等待。首次编写日期：2026-10-29；变更日期：2026-10-29；修改记录：2026-10-29：首次编写。 */
- void showLight(Light);
 };
 }
 #endif

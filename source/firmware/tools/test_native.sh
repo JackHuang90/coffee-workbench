@@ -9,9 +9,9 @@ mkdir -p build
 CXX="${CXX:-g++}"
 flags=(-std=c++17 -Iinclude -Wall -Wextra -Wpedantic -Werror -g)
 if [[ "${SANITIZE:-0}" == 1 ]]; then flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie); fi
-sources=(src/core.cpp src/protocol.cpp src/modbus.cpp src/rtu.cpp src/http.cpp src/provisioning.cpp src/portal.cpp src/ble.cpp)
+sources=(src/core.cpp src/protocol.cpp src/modbus.cpp src/rtu.cpp src/http.cpp src/provisioning.cpp src/portal.cpp src/ble.cpp src/ble_setup.cpp src/indicator.cpp)
 for mode in 0 1; do
-  for suite in core protocol transports http http_integration reply_drain artisan provisioning portal cors local_origins ble ble_adapter; do
+  for suite in core protocol transports http http_integration reply_drain artisan provisioning portal cors local_origins ble ble_setup ble_adapter indicator; do
     adapter=()
     if [[ "$suite" == ble_adapter ]]; then adapter=(-Itests/ble_sdk_stubs src/esp_ble.cpp); fi
     "$CXX" "${flags[@]}" "${adapter[@]}" -DROAST_VIRTUAL_DEMO="$mode" "tests/test_${suite}.cpp" "${sources[@]}" -o "build/test_${suite}_${mode}"

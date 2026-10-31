@@ -43,9 +43,6 @@ void EspProvisioning::begin(Controller& controller,uint32_t now){
  if(storage_){Record first{};const bool a=store_.getBytesLength("slot0")==sizeof(first)&&store_.getBytes("slot0",&first,sizeof(first))==sizeof(first);const bool b=store_.getBytesLength("slot1")==sizeof(scratch_)&&store_.getBytes("slot1",&scratch_,sizeof(scratch_))==sizeof(scratch_);slot_=selectRecord(a?&first:nullptr,b?&scratch_:nullptr);if(slot_>=0){const Record& selected=slot_==0?first:scratch_;sequence_=selected.sequence;configured_=selected.present;if(configured_)committed_=selected.config;}}
  if(!configured_&&ROAST_DEFAULT_ORIGIN[0]&&normalizeOrigin(ROAST_DEFAULT_ORIGIN,committed_.origins[0]))committed_.originCount=1;
  machine_.begin(configured_,now);
- #if ROAST_RGB_ENABLE
- ledReady_=rmtInit(ROAST_RGB_PIN,RMT_TX_MODE,RMT_MEM_NUM_BLOCKS_1,10000000);if(ledReady_)rmtSetEOT(ROAST_RGB_PIN,0);
-#endif
  if(!configured_)openAp();
  if(!identity_||!storage_)std::strcpy(error_,"storage_unavailable_use_USB_SETUP");
 }
@@ -98,9 +95,7 @@ void EspProvisioning::tick(uint32_t now){
  switch(deferTest_?Action::None:machine_.tick(now,connected)){case Action::ConnectSaved:connect(committed_,now);break;case Action::ConnectCandidate:connect(candidate_,now);break;case Action::Disconnect:pendingConnection_=nullptr;WiFi.disconnectAsync(false,false);if(ap_)std::strcpy(error_,"connection_timeout_check_password_and_address");break;case Action::CloseAp:dns_.stop();WiFi.softAPdisconnect(true);ap_=false;WiFi.mode(WIFI_STA);break;case Action::None:break;}
  if(ap_)dnsWork();
  if(scanning_&&(WiFi.scanComplete()!=WIFI_SCAN_RUNNING||static_cast<uint32_t>(now-scanAt_)>15000)){scanning_=false;if(WiFi.scanComplete()==WIFI_SCAN_RUNNING){WiFi.scanDelete();std::strcpy(error_,"scan_timeout");}}
-#if ROAST_RGB_ENABLE
- showLight(light(!configured_&&!ap_?State::Failed:machine_.state(),button_.armed(),now));
-#endif
+
 }
 void EspProvisioning::dnsWork(){
  const int length=dns_.parsePacket();if(length<=0)return;
@@ -111,24 +106,13 @@ void EspProvisioning::dnsWork(){
  const size_t bytes=captiveDnsReply(dnsPacket_,static_cast<size_t>(length),sizeof(dnsPacket_),number(ap));
  if(bytes&&dns_.beginPacket(peer,port)){dns_.write(dnsPacket_,bytes);dns_.endPacket();}
 }
-void EspProvisioning::showLight(Light current){
-#if ROAST_RGB_ENABLE
- if(!ledReady_||current==lastLight_||!rmtTransmitCompleted(ROAST_RGB_PIN))return;
- const uint8_t level=std::min(unsigned(ROAST_RGB_BRIGHTNESS),32u);uint8_t r=0,g=0,b=0;
- switch(current){case Light::Blue:b=level;break;case Light::Yellow:r=g=level;break;case Light::Green:g=level;break;case Light::Red:r=level;break;case Light::Purple:r=b=level;break;case Light::Off:break;}
- uint8_t colors[3]={g,r,b};switch(ROAST_RGB_ORDER){case LED_COLOR_ORDER_RGB:colors[0]=r;colors[1]=g;colors[2]=b;break;case LED_COLOR_ORDER_BGR:colors[0]=b;colors[1]=g;colors[2]=r;break;case LED_COLOR_ORDER_BRG:colors[0]=b;colors[1]=r;colors[2]=g;break;case LED_COLOR_ORDER_RBG:colors[0]=r;colors[1]=b;colors[2]=g;break;case LED_COLOR_ORDER_GBR:colors[0]=g;colors[1]=b;colors[2]=r;break;default:break;}
- for(unsigned i=0;i<24;++i){const bool high=colors[i/8]&(1u<<(7-i%8));ledData_[i].level0=1;ledData_[i].duration0=high?8:4;ledData_[i].level1=0;ledData_[i].duration1=high?4:8;}
- if(rmtWriteAsync(ROAST_RGB_PIN,ledData_,24))lastLight_=current;
-#else
- (void)current;
-#endif
-}
-void EspProvisioning::stateJson(uint32_t){
+void EspProvisioning::stateJson(uint32_t,bool ble,bool authorized,bool pending,uint32_t remaining){
+ if(ble&&!authorized){std::snprintf(response_,sizeof(response_),"{\"state\":\"%s\",\"configured\":%s,\"connected\":%s,\"authorized\":false,\"pending\":%s,\"remaining_ms\":0}",stateName(machine_.state()),configured_?"true":"false",WiFi.status()==WL_CONNECTED?"true":"false",pending?"true":"false");return;}
  const State state=machine_.state();const Config& c=(state==State::Testing||state==State::Ready||state==State::SaveFailed||state==State::Saved)?candidate_:committed_;
- const bool connected=WiFi.status()==WL_CONNECTED;String json;json.reserve(sizeof(response_));json="{\"state\":";json+=quote(stateName(state));json+=",\"revision\":";json+=String(machine_.revision());json+=",\"token\":";json+=quote(token_);json+=",\"ssid\":";json+=quote(c.ssid);json+=",\"mode\":";json+=quote(c.staticIp?"static":"dhcp");json+=",\"ip\":";json+=quote(connected?WiFi.localIP().toString().c_str():c.ip);json+=",\"mask\":";json+=quote(c.mask);json+=",\"gateway\":";json+=quote(connected?WiFi.gatewayIP().toString().c_str():c.gateway);json+=",\"dns\":";json+=quote(c.dns);json+=",\"setup_url\":";json+=quote((String("http://")+WiFi.softAPIP().toString()).c_str());json+=",\"error\":";json+=quote(error_);json+=",\"scanning\":";json+=scanning_?"true":"false";json+=",\"origins\":[";
+ const bool connected=WiFi.status()==WL_CONNECTED;String json;json.reserve(sizeof(response_));json="{\"state\":";json+=quote(stateName(state));json+=",\"revision\":";json+=String(machine_.revision());if(!ble){json+=",\"token\":";json+=quote(token_);}json+=",\"ssid\":";json+=quote(c.ssid);json+=",\"mode\":";json+=quote(c.staticIp?"static":"dhcp");json+=",\"ip\":";json+=quote(connected?WiFi.localIP().toString().c_str():c.ip);json+=",\"mask\":";json+=quote(c.mask);json+=",\"gateway\":";json+=quote(connected?WiFi.gatewayIP().toString().c_str():c.gateway);json+=",\"dns\":";json+=quote(c.dns);json+=",\"setup_url\":";json+=quote((String("http://")+WiFi.softAPIP().toString()).c_str());json+=",\"error\":";json+=quote(error_);json+=",\"scanning\":";json+=scanning_?"true":"false";json+=",\"origins\":[";
  for(unsigned i=0;i<c.originCount;++i){if(i)json+=',';json+=quote(c.origins[i]);}json+=']';
  if(migrationGateway_){const IPAddress next((migrationGateway_>>24)&255,(migrationGateway_>>16)&255,(migrationGateway_>>8)&255,migrationGateway_&255);json+=",\"reconnect_url\":";json+=quote((String("http://")+next.toString()+"/").c_str());}
- const int count=WiFi.scanComplete();if(count>=0){json+=",\"networks\":[";for(int i=0;i<std::min(count,12);++i){if(i)json+=',';json+="{\"ssid\":";json+=quote(WiFi.SSID(i).c_str());json+=",\"rssi\":";json+=String(WiFi.RSSI(i));json+='}';}json+=']';}json+='}';
+ const int count=WiFi.scanComplete();if(count>=0){json+=",\"networks\":[";for(int i=0;i<std::min(count,12);++i){if(i)json+=',';json+="{\"ssid\":";json+=quote(WiFi.SSID(i).c_str());json+=",\"rssi\":";json+=String(WiFi.RSSI(i));json+='}';}json+=']';}else json+=",\"networks\":[]";if(ble){json+=",\"authorized\":true,\"pending\":false,\"remaining_ms\":";json+=String(remaining);json+=",\"configured\":";json+=configured_?"true":"false";json+=",\"connected\":";json+=connected?"true":"false";}json+='}';
  if(json.length()>=sizeof(response_))std::strcpy(response_,"{\"error\":\"response_limit\"}");else json.toCharArray(response_,sizeof(response_));
 }
 int EspProvisioning::handle(const PortalRequest& request,bool apInterface,uint32_t now,const char*& body,const char*& type){
@@ -141,20 +125,26 @@ int EspProvisioning::handle(const PortalRequest& request,bool apInterface,uint32
   if(!std::strcmp(request.path(),"/")||!std::strcmp(request.path(),"/setup")){body=setupPage;type="text/html; charset=utf-8";return 200;}
   std::strcpy(response_,"{\"redirect\":\"setup\"}");return 302;
  }
- if(!std::strcmp(request.path(),"/setup/test")){
+ if(std::strncmp(request.path(),"/setup/",7)){std::strcpy(response_,"{\"error\":\"not_found\"}");return 404;}
+ return setupAction(request.path()+7,request.body(),now,body);
+}
+const char* EspProvisioning::bleState(uint32_t now,bool authorized,bool pending,uint32_t remaining){stateJson(now,true,authorized,pending,remaining);return response_;}
+int EspProvisioning::setupAction(const char* op,const char* form,uint32_t now,const char*& body){
+ body=response_;char path[32];std::snprintf(path,sizeof(path),"/setup/%s",op);
+ if(!std::strcmp(path,"/setup/test")){
   if(machine_.state()==State::Testing||machine_.state()==State::Saved){std::strcpy(response_,"{\"error\":\"connection_busy\"}");return 409;}
-  const Error result=parseForm(request.body(),scratch_.config);if(result!=Error::None){const char* message=result==Error::Origin?"invalid_website_origin":result==Error::Address?"invalid_static_ipv4":result==Error::Password?"invalid_wifi_password":"invalid_ssid_or_form";std::snprintf(response_,sizeof(response_),"{\"error\":\"%s\"}",message);return 400;}
+  const Error result=parseForm(form,scratch_.config);if(result!=Error::None){const char* message=result==Error::Origin?"invalid_website_origin":result==Error::Address?"invalid_static_ipv4":result==Error::Password?"invalid_wifi_password":"invalid_ssid_or_form";std::snprintf(response_,sizeof(response_),"{\"error\":\"%s\"}",message);return 400;}
   candidate_=scratch_.config;error_[0]=0;controller_->forceStop(now,"network_configuration");++epoch_;machine_.test(now);
   if(candidate_.staticIp){uint32_t station,mask;ipv4(candidate_.ip,station);ipv4(candidate_.mask,mask);const uint32_t next=apGateway(number(WiFi.softAPIP()),station,mask);if(next&&next!=number(WiFi.softAPIP())){migrationGateway_=next;migrationAt_=now;deferTest_=true;}}
   if(migrationGateway_){const IPAddress next((migrationGateway_>>24)&255,(migrationGateway_>>16)&255,(migrationGateway_>>8)&255,migrationGateway_&255);std::snprintf(response_,sizeof(response_),"{\"ok\":true,\"revision\":%lu,\"reconnect_url\":\"http://%s/\"}",static_cast<unsigned long>(machine_.revision()),next.toString().c_str());}else std::snprintf(response_,sizeof(response_),"{\"ok\":true,\"revision\":%lu}",static_cast<unsigned long>(machine_.revision()));return 202;
  }
- if(!std::strcmp(request.path(),"/setup/save")){
-  uint32_t ticket=0;bool valid=!std::strncmp(request.body(),"revision=",9)&&request.body()[9];if(valid){for(const char* p=request.body()+9;*p;++p){if(*p<'0'||*p>'9'||ticket>429496729u||(ticket==429496729u&&*p>'5')){valid=false;break;}ticket=ticket*10+static_cast<uint32_t>(*p-'0');}}
+ if(!std::strcmp(path,"/setup/save")){
+  uint32_t ticket=0;bool valid=!std::strncmp(form,"revision=",9)&&form[9];if(valid){for(const char* p=form+9;*p;++p){if(*p<'0'||*p>'9'||ticket>429496729u||(ticket==429496729u&&*p>'5')){valid=false;break;}ticket=ticket*10+static_cast<uint32_t>(*p-'0');}}
   if(migrationGateway_||!valid||!machine_.canSave(ticket)||WiFi.status()!=WL_CONNECTED){std::strcpy(response_,"{\"error\":\"test_connection_first\"}");return 409;}
   const bool success=persist(candidate_,true);machine_.saved(success,now);if(!success){std::strcpy(error_,"persistent_save_failed");std::strcpy(response_,"{\"error\":\"persistent_save_failed\"}");return 503;}
   committed_=candidate_;configured_=true;error_[0]=0;std::strcpy(response_,"{\"ok\":true}");return 200;
  }
- if(!std::strcmp(request.path(),"/setup/scan")){
+ if(!std::strcmp(path,"/setup/scan")){
   if(scanning_||machine_.state()==State::Testing||machine_.state()==State::Saved){std::strcpy(response_,"{\"error\":\"scan_busy\"}");return 409;}
   WiFi.scanDelete();const int result=WiFi.scanNetworks(true,false,false,120);if(result==WIFI_SCAN_FAILED){std::strcpy(response_,"{\"error\":\"scan_failed\"}");return 503;}scanning_=result==WIFI_SCAN_RUNNING;scanAt_=now;std::strcpy(response_,"{\"ok\":true}");return 202;
  }
