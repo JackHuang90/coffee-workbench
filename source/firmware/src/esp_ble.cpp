@@ -15,6 +15,7 @@
 #include <freertos/queue.h>
 #include <nimble/nimble_port.h>
 #include <host/ble_hs_mbuf.h>
+#include <host/ble_gap.h>
 #include <cstdio>
 #include <algorithm>
 // Arduino BLE's VERBOSE setValue logger includes raw GATT values. Refuse such builds.
@@ -35,9 +36,9 @@ struct Packet {
  bool setup=false;
  uint32_t generation=0;
  uint32_t epoch=0;
- // 排队时的毫秒时钟，过旧消息断开而不继续显示旧状态。
+ // 排队时的毫秒时钟，过旧消息丢弃而不继续显示旧状态。
  uint32_t queuedAt=0;
- // 有效通知字节数；0表示请求断开当前过期会话。
+ // 有效通知字节数；遥测过期时丢弃快照，不排入空通知。
  size_t length=0;
  // 最多244字节的通知，包括8字节协议头。
  uint8_t bytes[244]{};
@@ -56,6 +57,52 @@ struct Receipt {
 portMUX_TYPE sessionMux=portMUX_INITIALIZER_UNLOCKED;
 // 当前连接、订阅与MTU，由蓝牙任务更新，主循环只复制。
 Session session;
+// SDK可能在应用连接登记前恢复绑定设备的CCCD；只缓存一个内部连接的通知位。
+// 不缓存身份或授权，所有访问都要求持有sessionMux。
+struct EarlySubscriptions {
+ uint16_t connection=65535;
+ bool statusKnown=false,setupKnown=false,status=false,setup=false;
+};
+EarlySubscriptions earlySubscriptions;
+bool cacheEarlySubscription(const ble_gap_conn_desc& info,bool enabled,bool setup){
+ if(session.connection!=65535||info.conn_handle==65535||!info.sec_state.encrypted||!info.sec_state.bonded){earlySubscriptions=EarlySubscriptions{};return false;}
+ if(earlySubscriptions.connection!=info.conn_handle){earlySubscriptions=EarlySubscriptions{};earlySubscriptions.connection=info.conn_handle;}
+ if(setup){earlySubscriptions.setupKnown=true;earlySubscriptions.setup=enabled;}else {earlySubscriptions.statusKnown=true;earlySubscriptions.status=enabled;}
+ return true;
+}
+// 仅保存临时计数和非敏感状态；所有读写与会话共用短临界区。
+enum class LocalClose {None,ExtraConnection,InvalidNotification,NotifyError};
+// 固定拒绝阶段仅描述流程，不保存用户载荷；数值映射见诊断版本2验证记录。
+enum class SetupReject {None=0,Unencrypted=1,Length=2,Connection=3,QueueFull=4,StaleFragment=5,InvalidFragment=6,InvalidRequest=7,Authorization=8,ResponseLimit=9,NotifyRejected=10,ReplyExpired=11,Unsubscribed=12,IgnoredSubscribe=13};
+struct DiagnosticState {
+ bool encrypted=false,bonded=false;
+ uint32_t connections=0,disconnections=0,authEvents=0;
+ int lastDisconnectReason=-1,lastAuthStatus=-1,lastNotifyError=0,securityStartRc=-1;
+ LocalClose localClose=LocalClose::None;
+ uint32_t setupWrites=0,setupWriteLength=0,setupQueued=0,setupCompleteRequests=0,setupReplies=0,setupNotifications=0;
+ int setupLastCode=0;
+ SetupReject setupReject=SetupReject::None;
+};
+DiagnosticState diagnosticState;
+void recordSetupReject(SetupReject stage){portENTER_CRITICAL(&sessionMux);diagnosticState.setupReject=stage;portEXIT_CRITICAL(&sessionMux);}
+ble_gap_event_listener diagnosticListener{};
+// SDK两参断线回调不含reason；旁听GAP事件只记录原因，不改写或消费事件。
+int diagnosticGapEvent(ble_gap_event* event,void*){
+ if(event->type==BLE_GAP_EVENT_DISCONNECT){portENTER_CRITICAL(&sessionMux);diagnosticState.lastDisconnectReason=event->disconnect.reason;portEXIT_CRITICAL(&sessionMux);}return 0;
+}
+class DiagnosticSecurityCallbacks final:public BLESecurityCallbacks {
+ void onAuthenticationComplete(ble_gap_conn_desc* desc,int status)override {
+  portENTER_CRITICAL(&sessionMux);++diagnosticState.authEvents;diagnosticState.lastAuthStatus=status;
+  if(desc&&session.connection==desc->conn_handle){diagnosticState.encrypted=desc->sec_state.encrypted;diagnosticState.bonded=desc->sec_state.bonded;}portEXIT_CRITICAL(&sessionMux);
+ }
+ // 安装诊断回调不能启用SDK默认的自动PIN/属性授权，也不能输出配对凭据。
+ bool onConfirmPIN(uint32_t)override{return false;}
+ bool onAuthorizationRequest(uint16_t,uint16_t,bool)override{return false;}
+ uint32_t onPassKeyRequest()override{return BLESecurity::getPassKey();}
+ void onPassKeyNotify(uint32_t)override{}
+ bool onSecurityRequest()override{return true;}
+};
+DiagnosticSecurityCallbacks diagnosticSecurityCallbacks;
 uint32_t connectionEpoch=0;
 bool setupSubscribed=false;
 uint32_t lastActivityAt=0;
@@ -114,8 +161,8 @@ uint32_t attemptedAt=0;
 /** 功能：在短临界区复制会话，不访问SDK对象或Controller。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 Session readSession(){portENTER_CRITICAL(&sessionMux);const Session copy=session;portEXIT_CRITICAL(&sessionMux);return copy;}
 /** 功能：在蓝牙任务使当前订阅失效并请求断开，保留Wi-Fi控制所有权。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
-void closeSession(const Session& current){
- portENTER_CRITICAL(&sessionMux);session.subscribe(current.connection,false);portEXIT_CRITICAL(&sessionMux);
+void closeSession(const Session& current,LocalClose reason){
+ portENTER_CRITICAL(&sessionMux);diagnosticState.localClose=reason;session.subscribe(current.connection,false);portEXIT_CRITICAL(&sessionMux);
  ble_gap_terminate(current.connection,BLE_ERR_REM_USER_CONN_TERM);
 }
 /** 功能：蓝牙任务中发送一片；重验代际/MTU/队列寿命，内存不足返回重试。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
@@ -126,14 +173,16 @@ void sendOnHost(ble_npl_event*){
  bool setupCanSend=false;
  if(packet.setup){portENTER_CRITICAL(&sessionMux);setupCanSend=setupSubscribed&&connectionEpoch==packet.epoch&&incomingFailures==packet.generation;portEXIT_CRITICAL(&sessionMux);setupCanSend=setupCanSend&&current.connection!=65535&&ble_gap_conn_find(current.connection,&desc)==0&&desc.sec_state.encrypted;}
  const Delivery delivery=packet.setup?(setupCanSend&&uint32_t(millis()-packet.queuedAt)<100?Delivery::Send:Delivery::Drop):assessDelivery(current,packet.epoch,packet.length,packet.queuedAt,millis());
- if(delivery==Delivery::Close)closeSession(current);
+ if(packet.setup&&delivery==Delivery::Drop)recordSetupReject(SetupReject::NotifyRejected);
+ if(delivery==Delivery::Close)closeSession(current,LocalClose::InvalidNotification);
  if(delivery==Delivery::Send){
    os_mbuf* buffer=ble_hs_mbuf_from_flat(packet.bytes,packet.length);
    if(buffer){
     // NimBLE consumes the mbuf even when notify returns an error. No indication waits.
     const int result=ble_gatts_notify_custom(current.connection,packet.setup?setupHandle:statusHandle,buffer);
     receipt.accepted=result==0;receipt.sentAt=millis();
-    if(result&&result!=BLE_HS_ENOMEM&&result!=BLE_HS_EBUSY&&result!=BLE_HS_EAGAIN)closeSession(current);
+    if(result||packet.setup){portENTER_CRITICAL(&sessionMux);if(result){diagnosticState.lastNotifyError=result;if(packet.setup)diagnosticState.setupReject=SetupReject::NotifyRejected;}else ++diagnosticState.setupNotifications;portEXIT_CRITICAL(&sessionMux);}
+    if(result&&result!=BLE_HS_ENOMEM&&result!=BLE_HS_EBUSY&&result!=BLE_HS_EAGAIN)closeSession(current,LocalClose::NotifyError);
    }
  }
  xQueueOverwrite(receipts,&receipt);
@@ -146,12 +195,21 @@ void relayToHost(void*){
 class ServerCallbacks final:public BLEServerCallbacks {
  /** 功能：登记首个连接，额外连接直接拒绝。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  void onConnect(BLEServer*,ble_gap_conn_desc* info)override {
-  portENTER_CRITICAL(&sessionMux);const bool accepted=session.connect(info->conn_handle);if(accepted){++connectionEpoch;setupSubscribed=false;lastActivityAt=0;}portEXIT_CRITICAL(&sessionMux);
+  portENTER_CRITICAL(&sessionMux);++diagnosticState.connections;const bool accepted=session.connect(info->conn_handle);
+  if(!accepted)diagnosticState.localClose=LocalClose::ExtraConnection;
+  if(accepted){
+   const bool restored=earlySubscriptions.connection==info->conn_handle&&info->sec_state.encrypted&&info->sec_state.bonded;
+   diagnosticState.encrypted=info->sec_state.encrypted;diagnosticState.bonded=info->sec_state.bonded;++connectionEpoch;lastActivityAt=0;
+   setupSubscribed=restored&&earlySubscriptions.setupKnown&&earlySubscriptions.setup;
+   if(restored&&earlySubscriptions.statusKnown)session.subscribe(info->conn_handle,earlySubscriptions.status);
+   if(restored&&earlySubscriptions.setupKnown)++incomingFailures;
+  }
+  earlySubscriptions=EarlySubscriptions{};portEXIT_CRITICAL(&sessionMux);
   if(!accepted)ble_gap_terminate(info->conn_handle,BLE_ERR_REM_USER_CONN_TERM);
  }
  /** 功能：匹配断开时重置连接代际，禁止复用旧订阅。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  void onDisconnect(BLEServer*,ble_gap_conn_desc* info)override {
-  portENTER_CRITICAL(&sessionMux);if(session.connection==info->conn_handle){++connectionEpoch;setupSubscribed=false;lastActivityAt=0;}session.disconnect(info->conn_handle);portEXIT_CRITICAL(&sessionMux);
+  portENTER_CRITICAL(&sessionMux);earlySubscriptions=EarlySubscriptions{};++diagnosticState.disconnections;if(session.connection==info->conn_handle){diagnosticState.encrypted=diagnosticState.bonded=false;++connectionEpoch;setupSubscribed=false;lastActivityAt=0;}session.disconnect(info->conn_handle);portEXIT_CRITICAL(&sessionMux);
  }
  /** 功能：同步当前连接实际MTU，编码时始终遵守最新上限。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  void onMtuChanged(BLEServer*,ble_gap_conn_desc* info,uint16_t mtu)override {
@@ -162,22 +220,31 @@ class ServerCallbacks final:public BLEServerCallbacks {
 class StatusCallbacks final:public BLECharacteristicCallbacks {
  /** 功能：在订阅边界使旧快照与排队通知失效。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  void onSubscribe(BLECharacteristic*,ble_gap_conn_desc* info,uint16_t value)override {
-  portENTER_CRITICAL(&sessionMux);session.subscribe(info->conn_handle,(value&1)!=0);portEXIT_CRITICAL(&sessionMux);
+  portENTER_CRITICAL(&sessionMux);if(session.connection==info->conn_handle)session.subscribe(info->conn_handle,(value&1)!=0);else cacheEarlySubscription(*info,(value&1)!=0,false);portEXIT_CRITICAL(&sessionMux);
  }
 };
 // Callbacks copy only bounded encrypted fragments; network/controller work stays on loop.
 class SetupCallbacks final:public BLECharacteristicCallbacks {
  void onWrite(BLECharacteristic* c,ble_gap_conn_desc* info)override {
-  if(!info->sec_state.encrypted)return;
-  const auto value=c->getValue();if(value.length()<9||value.length()>244){portENTER_CRITICAL(&sessionMux);++incomingFailures;portEXIT_CRITICAL(&sessionMux);return;}
+  portENTER_CRITICAL(&sessionMux);++diagnosticState.setupWrites;portEXIT_CRITICAL(&sessionMux);
+  if(!info->sec_state.encrypted){recordSetupReject(SetupReject::Unencrypted);return;}
+  const auto value=c->getValue();
+  portENTER_CRITICAL(&sessionMux);diagnosticState.setupWriteLength=static_cast<uint32_t>(value.length());portEXIT_CRITICAL(&sessionMux);
+  if(value.length()<9||value.length()>244){portENTER_CRITICAL(&sessionMux);++incomingFailures;diagnosticState.setupReject=SetupReject::Length;portEXIT_CRITICAL(&sessionMux);return;}
   Incoming item;bool accepted=false;
   portENTER_CRITICAL(&sessionMux);accepted=session.connection==info->conn_handle;if(accepted){item.epoch=connectionEpoch;item.generation=incomingFailures;lastActivityAt=millis();}portEXIT_CRITICAL(&sessionMux);
-  if(!accepted)return;
+  if(!accepted){recordSetupReject(SetupReject::Connection);return;}
   item.at=millis();item.length=value.length();std::memcpy(item.bytes,value.c_str(),item.length);
-  if(xQueueSend(incoming,&item,0)!=pdTRUE){portENTER_CRITICAL(&sessionMux);++incomingFailures;portEXIT_CRITICAL(&sessionMux);}
+  if(xQueueSend(incoming,&item,0)!=pdTRUE){portENTER_CRITICAL(&sessionMux);++incomingFailures;diagnosticState.setupReject=SetupReject::QueueFull;portEXIT_CRITICAL(&sessionMux);}
+  else {portENTER_CRITICAL(&sessionMux);++diagnosticState.setupQueued;portEXIT_CRITICAL(&sessionMux);}
  }
  void onSubscribe(BLECharacteristic*,ble_gap_conn_desc* info,uint16_t value)override {
-  portENTER_CRITICAL(&sessionMux);if(session.connection==info->conn_handle){setupSubscribed=(value&1)!=0;++incomingFailures;}portEXIT_CRITICAL(&sessionMux);
+  bool secure=false;
+  portENTER_CRITICAL(&sessionMux);if(session.connection==info->conn_handle){setupSubscribed=(value&1)!=0;++incomingFailures;secure=setupSubscribed&&!info->sec_state.encrypted;}else if(!cacheEarlySubscription(*info,(value&1)!=0,true))diagnosticState.setupReject=SetupReject::IgnoredSubscribe;portEXIT_CRITICAL(&sessionMux);
+  // NimBLE only enqueues security here. Windows Chrome cannot be assumed to
+  // initiate pairing when the first protected write fails. Start it when the
+  // user opens setup; ordinary telemetry remains available without pairing.
+  if(secure){int rc=-1;BLESecurity::startSecurity(info->conn_handle,&rc);portENTER_CRITICAL(&sessionMux);diagnosticState.securityStartRc=rc;portEXIT_CRITICAL(&sessionMux);}
  }
 };
 SetupCallbacks setupCallbacks;
@@ -197,9 +264,11 @@ bool begin(){
  if(!BLEDevice::init(name))return false;
  ble_npl_event_init(&sendEvent,sendOnHost,nullptr); // NPL dispatch table is installed by BLEDevice::init.
  BLEDevice::setMTU(247);
- BLESecurity::setAuthenticationMode(false,false,true);
+ BLESecurity::setAuthenticationMode(true,false,true);
  BLESecurity::setCapability(BLE_HS_IO_NO_INPUT_OUTPUT);
  BLESecurity::setForceAuthentication(false);
+ BLEDevice::setSecurityCallbacks(&diagnosticSecurityCallbacks);
+ ble_gap_event_listener_register(&diagnosticListener,diagnosticGapEvent,nullptr);
  BLEServer* server=BLEDevice::createServer();if(!server)return false;
  server->setCallbacks(&serverCallbacks);server->advertiseOnDisconnect(true);
  BLEService* service=server->createService(serviceUuid);if(!service)return false;
@@ -219,15 +288,23 @@ bool begin(){
 }
 void attachProvisioning(net::EspProvisioning* value){provisioning=value;}
 LinkState linkState(){const auto current=readSession();LinkState out;out.connected=current.connection!=65535;out.subscribed=current.subscribed;out.setupPending=out.connected&&setupAuthorization.pending();out.setupAuthorized=out.connected&&setupAuthorization.authorized(millis());portENTER_CRITICAL(&sessionMux);out.lastActivityAt=lastActivityAt;portEXIT_CRITICAL(&sessionMux);return out;}
+size_t diagnostics(char* out,size_t capacity,uint32_t now){
+ (void)now;if(!out||!capacity)return 0;
+ portENTER_CRITICAL(&sessionMux);const DiagnosticState d=diagnosticState;const Session current=session;const bool setup=setupSubscribed;portEXIT_CRITICAL(&sessionMux);
+ const char* local="none";switch(d.localClose){case LocalClose::ExtraConnection:local="extra_connection";break;case LocalClose::InvalidNotification:local="invalid_notification";break;case LocalClose::NotifyError:local="notify_error";break;case LocalClose::None:break;}
+ const int size=std::snprintf(out,capacity,"{\"kind\":\"ble_diagnostics\",\"diagnostic_version\":2,\"connected\":%s,\"subscribed\":%s,\"setup_subscribed\":%s,\"encrypted\":%s,\"bonded\":%s,\"mtu\":%u,\"connections\":%lu,\"disconnections\":%lu,\"last_disconnect_reason\":%d,\"last_auth_status\":%d,\"auth_events\":%lu,\"last_notify_error\":%d,\"local_close_reason\":\"%s\",\"security_start_rc\":%d,\"setup_writes\":%lu,\"setup_write_length\":%lu,\"setup_queued\":%lu,\"setup_complete_requests\":%lu,\"setup_replies\":%lu,\"setup_last_code\":%d,\"setup_notifications\":%lu,\"setup_reject_stage\":%u}",current.connection!=65535?"true":"false",current.subscribed?"true":"false",setup?"true":"false",d.encrypted?"true":"false",d.bonded?"true":"false",unsigned(current.mtu),static_cast<unsigned long>(d.connections),static_cast<unsigned long>(d.disconnections),d.lastDisconnectReason,d.lastAuthStatus,static_cast<unsigned long>(d.authEvents),d.lastNotifyError,local,d.securityStartRc,static_cast<unsigned long>(d.setupWrites),static_cast<unsigned long>(d.setupWriteLength),static_cast<unsigned long>(d.setupQueued),static_cast<unsigned long>(d.setupCompleteRequests),static_cast<unsigned long>(d.setupReplies),d.setupLastCode,static_cast<unsigned long>(d.setupNotifications),unsigned(d.setupReject));
+ if(size<=0||size_t(size)>=capacity){out[0]=0;return 0;}return size_t(size);
+}
 namespace {
 void setupReply(uint16_t id,int code,const char* data,uint32_t now){
  const int n=std::snprintf(setupResponse,sizeof(setupResponse),"{\"id\":%u,\"code\":%d,\"data\":%s}",unsigned(id),code,data);
- if(n<=0||size_t(n)>kSetupMax){const int fallback=std::snprintf(setupResponse,sizeof(setupResponse),"{\"id\":%u,\"code\":503,\"data\":{\"error\":\"response_limit\"}}",unsigned(id));setupLength=size_t(fallback);}else setupLength=size_t(n);
+ if(n<=0||size_t(n)>kSetupMax){const int fallback=std::snprintf(setupResponse,sizeof(setupResponse),"{\"id\":%u,\"code\":503,\"data\":{\"error\":\"response_limit\"}}",unsigned(id));setupLength=size_t(fallback);code=503;recordSetupReject(SetupReject::ResponseLimit);}else setupLength=size_t(n);
  setupOffset=0;setupResponseAt=now;++setupSequence;
+ portENTER_CRITICAL(&sessionMux);++diagnosticState.setupReplies;diagnosticState.setupLastCode=code;portEXIT_CRITICAL(&sessionMux);
 }
 void setupRequest(uint32_t now){
- char* message=const_cast<char*>(setupAssembler.data());char* op=std::strchr(message,'\n');if(!op)return;*op++=0;char* form=std::strchr(op,'\n');if(!form)return;*form++=0;
- uint32_t id=0;for(const char* p=message;*p;++p){if(*p<'0'||*p>'9'||id>6553)return;id=id*10+unsigned(*p-'0');}if(!id||id>65535)return;
+ char* message=const_cast<char*>(setupAssembler.data());char* op=std::strchr(message,'\n');if(!op){recordSetupReject(SetupReject::InvalidRequest);return;}*op++=0;char* form=std::strchr(op,'\n');if(!form){recordSetupReject(SetupReject::InvalidRequest);return;}*form++=0;
+ uint32_t id=0;for(const char* p=message;*p;++p){if(*p<'0'||*p>'9'||id>6553){recordSetupReject(SetupReject::InvalidRequest);return;}id=id*10+unsigned(*p-'0');}if(!id||id>65535){recordSetupReject(SetupReject::InvalidRequest);return;}
  const bool state=std::strcmp(op,"state")==0,unlock=std::strcmp(op,"unlock")==0,close=std::strcmp(op,"close")==0;
  if((state||unlock||close||std::strcmp(op,"scan")==0)&&*form){setupReply(id,400,"{\"error\":\"unexpected_body\"}",now);return;}
  if(unlock||close){
@@ -237,7 +314,7 @@ void setupRequest(uint32_t now){
  if(close)setupAuthorization.close();
  previousAuthorization=setupAuthorization.authorized(now);
  const bool allowed=setupAuthorization.authorized(now);
- if(!state&&!unlock&&!close&&!allowed){setupReply(id,403,"{\"error\":\"physical_confirmation_required\"}",now);return;}
+ if(!state&&!unlock&&!close&&!allowed){recordSetupReject(SetupReject::Authorization);setupReply(id,403,"{\"error\":\"physical_confirmation_required\"}",now);return;}
  const char* body="{\"error\":\"wifi_unavailable\"}";int code=503;
 #if ROAST_WIFI_ENABLE
  if(provisioning){if(state||unlock||close){body=provisioning->bleState(now,allowed,setupAuthorization.pending(),setupAuthorization.remaining(now));code=200;}else code=provisioning->setupAction(op,form,now,body);}
@@ -256,8 +333,16 @@ void setupTick(const Session& current,uint32_t now){
  if(boundary){setupAssembler.clear();setupLength=setupOffset=0;seenConnection=epoch;seenFailures=failures;}
  if(confirmation)setupAuthorization.confirm(now);
  previousAuthorization=setupAuthorization.authorized(now);
- Incoming item;unsigned limit=16;while(limit--&&xQueueReceive(incoming,&item,0)==pdTRUE){if(item.epoch==epoch&&item.generation==failures&&uint32_t(now-item.at)<10000&&setupAssembler.push(item.bytes,item.length,item.at)){setupRequest(now);setupAssembler.clear();break;}item=Incoming{};}
- if(setupLength&&uint32_t(now-setupResponseAt)>=10000){std::memset(setupResponse,0,sizeof(setupResponse));setupLength=0;}
+ Incoming item;unsigned limit=16;while(limit--&&xQueueReceive(incoming,&item,0)==pdTRUE){
+  // 回调可能晚于本轮now取样；出队后读新时钟，避免新分片的年龄无符号下溢。
+  const uint32_t dequeuedAt=millis();
+  if(item.epoch==epoch&&item.generation==failures&&uint32_t(dequeuedAt-item.at)<10000){
+   if(setupAssembler.push(item.bytes,item.length,item.at)){portENTER_CRITICAL(&sessionMux);++diagnosticState.setupCompleteRequests;portEXIT_CRITICAL(&sessionMux);setupRequest(now);setupAssembler.clear();break;}
+   if(!setupAssembler.size())recordSetupReject(SetupReject::InvalidFragment);
+  }else recordSetupReject(SetupReject::StaleFragment);
+  item=Incoming{};
+ }
+ if(setupLength&&uint32_t(now-setupResponseAt)>=10000){std::memset(setupResponse,0,sizeof(setupResponse));setupLength=0;recordSetupReject(SetupReject::ReplyExpired);}
 }
 }
 /** 功能：同步快照、处理确认并最多排入一个有界通知；无等待或控制副作用。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
@@ -274,13 +359,15 @@ void tick(const Controller& controller,uint32_t now){
  // At MTU23, even a 1023-byte telemetry frame needs at most 860ms without
  // telemetry-side congestion, below its 1500ms deadline; setup has 10 seconds.
  Packet status;status.epoch=current.epoch;status.queuedAt=now;
- bool statusReady=false,statusExpired=false;
+ bool statusReady=false;
  if(current.subscribed){
+  if(stream.expired(now))stream.discard();
   if(stream.due(now)){const size_t size=statusJson(controller,now,statusBuffer,sizeof(statusBuffer));stream.begin(statusBuffer,size,now);}
-  status.length=stream.next(now,status.bytes,sizeof(status.bytes));statusExpired=stream.expired(now);statusReady=status.length||statusExpired;
+  status.length=stream.next(now,status.bytes,sizeof(status.bytes));statusReady=status.length!=0;
  }
+ if(setupLength&&!canSetup)recordSetupReject(SetupReject::Unsubscribed);
  const bool setupReady=canSetup&&setupLength;
- if(setupReady&&(!statusReady||(preferSetup&&!statusExpired))){
+ if(setupReady&&(!statusReady||preferSetup)){
   Packet packet;packet.setup=true;packet.epoch=seenConnection;packet.generation=seenFailures;packet.queuedAt=now;const size_t count=std::min(setupLength-setupOffset,size_t(std::min(uint16_t(244),uint16_t(current.mtu-3)))-8);
   packet.length=setupFrame(setupSequence,setupLength,setupOffset,reinterpret_cast<const uint8_t*>(setupResponse)+setupOffset,count,packet.bytes,sizeof(packet.bytes));
   if(packet.length&&xQueueSend(outgoing,&packet,0)==pdTRUE){pending=true;attempted=true;attemptedAt=now;pendingSetupEpoch=setupSequence;pendingSetupPayload=count;preferSetup=false;}

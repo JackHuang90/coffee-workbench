@@ -40,11 +40,11 @@ int main(){
  session.subscribe(8,true);assert(!session.subscribed);
  session.subscribe(7,true);stream.observe(session);assert(stream.due(0));
  assert(assessDelivery(session,session.epoch,20,0,100)==Delivery::Send);
- assert(assessDelivery(session,session.epoch,20,0,101)==Delivery::Close);
- assert(assessDelivery(session,session.epoch,21,0,0)==Delivery::Close);
+ assert(assessDelivery(session,session.epoch,20,0,101)==Delivery::Drop);
+ assert(assessDelivery(session,session.epoch,21,0,0)==Delivery::Close);assert(assessDelivery(session,session.epoch,21,0,101)==Delivery::Close);
  assert(assessDelivery(session,session.epoch,8,0,0)==Delivery::Close);
  assert(assessDelivery(session,session.epoch,0,0,0)==Delivery::Close);
- assert(assessDelivery(session,session.epoch,20,0xfffffff0u,40)==Delivery::Send);
+ assert(assessDelivery(session,session.epoch,20,0xfffffff0u,40)==Delivery::Send);assert(assessDelivery(session,session.epoch,20,0xfffffff0u,100)==Delivery::Drop);
  Session largeMtu=session;largeMtu.mtu=517;
  assert(assessDelivery(largeMtu,largeMtu.epoch,244,0,0)==Delivery::Send);
  assert(assessDelivery(largeMtu,largeMtu.epoch,245,0,0)==Delivery::Close);
@@ -58,7 +58,8 @@ int main(){
  const auto oldEpoch=session.epoch;session.subscribe(7,false);session.subscribe(7,true);assert(session.epoch!=oldEpoch);
  assert(assessDelivery(session,oldEpoch,20,0,0)==Delivery::Drop);
  stream.observe(session);assert(!stream.next(1000,out,sizeof(out)));assert(!stream.due(1000));assert(stream.due(2000));
- assert(stream.begin("abc",3,2000));assert(!stream.expired(3499)&&stream.expired(3500));
+ assert(stream.begin("abc",3,2000));assert(stream.next(2000,out,sizeof(out)));const uint16_t discardedSequence=out[2]|uint16_t(out[3])<<8;assert(!stream.expired(3499)&&stream.expired(3500));
+ stream.discard();stream.accepted(3500);assert(!stream.expired(3500));assert(!stream.next(3500,out,sizeof(out)));assert(stream.due(3500));assert(stream.begin("fresh",5,3500));assert(stream.next(3500,out,sizeof(out))==13);assert((out[2]|uint16_t(out[3])<<8)==uint16_t(discardedSequence+1));assert(out[6]==0&&out[7]==0&&out[8]=='f');
  session.disconnect(8);assert(session.connection==7);session.disconnect(7);stream.observe(session);assert(!stream.expired(3500)&&!stream.next(3500,out,sizeof(out)));
  assert(session.connect(7)&&!session.subscribed&&session.mtu==23);session.subscribe(7,true);stream.observe(session);
  assert(stream.begin("abc",3,0xfffffff0u));assert(!stream.expired(100));assert(stream.next(0xfffffff0u,out,sizeof(out)));stream.accepted(0xfffffff0u);

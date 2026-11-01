@@ -6,7 +6,8 @@ namespace roast::ble {
 /** 功能：判定排队通知的最终发送边界。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 Delivery assessDelivery(const Session& session,uint32_t epoch,size_t length,uint32_t queuedAt,uint32_t now){
  if(session.connection==65535||!session.subscribed||session.epoch!=epoch)return Delivery::Drop;
- if(session.mtu<23||length<9||length>std::min(size_t{244},size_t(session.mtu-3))||uint32_t(now-queuedAt)>100)return Delivery::Close;
+ if(session.mtu<23||length<9||length>std::min(size_t{244},size_t(session.mtu-3)))return Delivery::Close;
+ if(uint32_t(now-queuedAt)>100)return Delivery::Drop;
  return Delivery::Send;
 }
 /** 功能：接受单一客户端并初始化最小MTU。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
@@ -27,6 +28,7 @@ size_t Stream::next(uint32_t now,uint8_t* out,size_t capacity){if(!length_||expi
 void Stream::accepted(uint32_t now){if(!prepared_)return;offset_+=prepared_;prepared_=0;sent_=true;sentAt_=now;if(offset_==length_)length_=offset_=0;}
 /** 功能：拒绝寿命超过1.5秒的不完整快照。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 bool Stream::expired(uint32_t now)const{return length_&&uint32_t(now-startedAt_)>=1500;}
+void Stream::discard(){std::memset(json_,0,sizeof(json_));length_=offset_=prepared_=0;sent_=false;}
 /** 功能：编码通知。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 size_t encodeFragment(const uint8_t* json,size_t length,uint16_t sequence,size_t offset,uint16_t mtu,uint8_t* out,size_t capacity){
  if(!json||!out||!length||length>1023||offset>=length||mtu<23)return 0;

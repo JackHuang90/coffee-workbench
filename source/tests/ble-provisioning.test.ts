@@ -26,6 +26,107 @@ class Characteristic extends EventTarget {
 }
 afterEach(() => vi.useRealTimers());
 describe("setup wire protocol", () => {
+  it.each([
+    ["write", "读取配网写入特征"],
+    ["notify", "读取配网通知特征"],
+    ["subscribe", "订阅配网回复"],
+  ])("bounds a blocked %s initialization and ignores its late completion", async (phase, label) => {
+    vi.useFakeTimers();
+    const c = new Characteristic();
+    let release!: (value: Characteristic) => void;
+    const blocked = new Promise<Characteristic>((resolve) => {
+      release = resolve;
+    });
+    let lookups = 0;
+    if (phase === "subscribe") c.startNotifications = () => blocked;
+    const client = new BleProvisioningClient({
+      getCharacteristic: async () => {
+        lookups++;
+        if ((phase === "write" && lookups === 1) || (phase === "notify" && lookups === 2))
+          return blocked;
+        return c;
+      },
+    });
+    const request = client.request("state");
+    const rejection = expect(request).rejects.toThrow(label);
+    await vi.advanceTimersByTimeAsync(15000);
+    await rejection;
+    release(c);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(c.writes).toHaveLength(0);
+    await expect(client.request("state")).rejects.toThrow("关闭");
+    client.dispose();
+  });
+
+  it("does not replay an ambiguous failed write", async () => {
+    const c = new Characteristic();
+    const write = vi.fn(async () => {
+      throw new DOMException("GATT Server is disconnected.", "NetworkError");
+    });
+    c.writeValueWithResponse = write;
+    const client = new BleProvisioningClient({ getCharacteristic: async () => c });
+    await expect(client.request("save", "revision=7")).rejects.toThrow("disconnected");
+    expect(write).toHaveBeenCalledOnce();
+    client.dispose();
+  });
+
+  it("cancels a busy retry before another browser write begins", async () => {
+    vi.useFakeTimers();
+    const c = new Characteristic();
+    const write = vi.fn(async () => {
+      throw new DOMException("GATT operation already in progress.", "NetworkError");
+    });
+    c.writeValueWithResponse = write;
+    const client = new BleProvisioningClient({ getCharacteristic: async () => c });
+    const request = client.request("state");
+    const rejected = expect(request).rejects.toThrow("取消");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(write).toHaveBeenCalledOnce();
+    client.dispose();
+    await rejected;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it("retries a rejected busy GATT write without duplicating accepted fragments", async () => {
+    vi.useFakeTimers();
+    const c = new Characteristic();
+    let attempts = 0;
+    const write = c.writeValueWithResponse.bind(c);
+    c.writeValueWithResponse = async (bytes) => {
+      if (++attempts <= 2)
+        throw new DOMException("Connection already in progress.", "NetworkError");
+      await write(bytes);
+    };
+    const client = new BleProvisioningClient({ getCharacteristic: async () => c });
+    const request = client.request("state");
+    void request.catch(() => {});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c.writes.length).toBeGreaterThan(0);
+    c.send({ id: 1, code: 200, data: { authorized: false } });
+    expect((await request).authorized).toBe(false);
+    expect(attempts).toBe(c.writes.length + 2);
+    client.dispose();
+  });
+
+  it("preserves browser GATT diagnostics without including the submitted credentials", async () => {
+    const c = new Characteristic();
+    const cause = new DOMException("GATT Error: Not paired.", "NetworkError");
+    c.writeValueWithResponse = async () => {
+      throw cause;
+    };
+    const client = new BleProvisioningClient({ getCharacteristic: async () => c });
+    const error = await client
+      .request("test", "password=test-only-secret")
+      .catch((e) => e as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("NetworkError");
+    expect((error as Error).message).toContain("GATT Error: Not paired.");
+    expect((error as Error).message).not.toContain("test-only-secret");
+    expect((error as Error).cause).toBe(cause);
+    client.dispose();
+  });
+
   it("times out a stuck acknowledged write without waiting for the browser", async () => {
     vi.useFakeTimers();
     const c = new Characteristic();

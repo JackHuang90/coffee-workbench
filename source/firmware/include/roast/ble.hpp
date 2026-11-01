@@ -24,7 +24,7 @@ struct Session {
  /** 功能：订阅边界切换时废弃前一代消息。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  void subscribe(uint16_t id,bool enabled);
 };
-/** 功能：描述排队通知在实际发送前的最终处理，Close用于当前会话的过期或非法通知。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
+/** 功能：描述排队通知在实际发送前的最终处理，Close用于当前会话的非法通知，排队过期仅丢弃。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 enum class Delivery { Drop,Close,Send };
 /** 功能：重验会话代际、通知大小、MTU和100ms排队寿命。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 Delivery assessDelivery(const Session& session,uint32_t epoch,size_t length,uint32_t queuedAt,uint32_t now);
@@ -43,6 +43,8 @@ class Stream {
  void accepted(uint32_t now);
  /** 功能：在浏览器2秒组帧期限前报告持续拥塞或未完成帧。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
  bool expired(uint32_t now)const;
+ /** 功能：有界清空当前快照及待确认片，保留连接、序号和开始频率。 */
+ void discard();
  private:
  // 最新同步会话；仅由主循环调用流对象。
  Session session_{};

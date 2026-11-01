@@ -17,6 +17,8 @@ struct Color {
 };
 struct Frame { State state=State::Unconfigured;Color color{}; };
 // Pure selection/animation. elapsedMs is the unsigned elapsed time since begin.
+// Connected BLE shares a 3s communication cycle: 2s network, then 1s BLE.
+// Critical and active business indications preempt the communication cycle.
 Frame render(const Inputs& inputs,uint32_t elapsedMs);
 const char* stateName(State state);
 // Main-loop clock adapter; boot expires once, even across subsequent clock wraps.

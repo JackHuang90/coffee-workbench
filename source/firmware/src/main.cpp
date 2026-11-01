@@ -59,6 +59,8 @@ void usbWork(uint32_t now){
   const auto result=usbFrame.feed(static_cast<char>(Serial.read()),now);
   if(result==roast::LineFramer::Result::Rejected){const char* msg="{\"ok\":false,\"code\":\"bad_frame\"}";queueUsb(msg,std::strlen(msg));break;}
   if(result==roast::LineFramer::Result::Line){
+   // 显式USB只读诊断不依赖控制授权，也不加入正常遥测。
+   if(std::strcmp(usbFrame.data(),"BLEDIAG")==0){char response[roast::kResponseSize]{};queueUsb(response,roast::ble::diagnostics(response,sizeof(response),now));break;}
    #if ROAST_WIFI_ENABLE
    if(std::strcmp(usbFrame.data(),"SETUP")==0){char response[roast::kResponseSize]{};queueUsb(response,provisioning.setupInfo(response,sizeof(response)));break;}
 #endif

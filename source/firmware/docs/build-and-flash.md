@@ -4,7 +4,7 @@
 
 这是重新构建的参考固件。`s3_locked` 固定处于 LOCKED 状态，温度无有效来源、物理输出禁用；`s3_virtual_demo` 使用明确标示的虚拟热模型，可验证本地曲线与虚拟温控。两种镜像都没有绑定真实加热器、风机、DAC、SSR 或 RS485。
 
-参考板型为 ESP32-S3-DevKitC-1，配置 16 MB Flash、8 MB 八线 PSRAM（`qio_opi`）、BOOT GPIO0 和 GPIO48 WS2812。用户提供的图片含不同内存型号示例，实际模组、载板、USB、引脚和颜色顺序仍需核对。N16R8 仅表示内存规格。本次仅生成和检查文件，没有连接开发板或执行刷机。
+参考板型为 ESP32-S3-DevKitC-1，配置 16 MB Flash、8 MB 八线 PSRAM（`qio_opi`）、BOOT GPIO0 和 GPIO48 WS2812。用户提供的图片含不同内存型号示例，实际模组、载板、USB、引脚和颜色顺序仍需核对。N16R8 仅表示内存规格。
 
 ## 构建方法
 

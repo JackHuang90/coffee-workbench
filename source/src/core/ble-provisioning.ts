@@ -1,4 +1,5 @@
 /** BLE Wi-Fi setup uses the existing GATT service; credentials never enter storage or logs. */
+import { retryGattBusy } from "./ble-gatt";
 export const BLE_SETUP_WRITE_UUID = "b4e7a003-9d56-4f1b-a6e0-7d31c2f84590";
 export const BLE_SETUP_NOTIFY_UUID = "b4e7a004-9d56-4f1b-a6e0-7d31c2f84590";
 export interface SetupCharacteristic extends EventTarget {
@@ -135,11 +136,22 @@ export class BleProvisioningClient {
     void this.cancelled.catch(() => {});
   }
   private async start() {
-    if (!this.initialization)
-      this.initialization = (async () => {
+    if (!this.initialization) {
+      let phase = "读取配网写入特征";
+      // Windows 的特征发现/订阅本身也可能不返回；迟到完成不得继续发送配置。
+      const timer = setTimeout(
+        () =>
+          this.close(
+            new Error(`蓝牙配网准备超时（${phase}）；配网会话已关闭，请断开蓝牙后重新连接。`),
+          ),
+        15000,
+      );
+      const initialize = (async () => {
         let writer: SetupCharacteristic, notifier: SetupCharacteristic;
         try {
           writer = await this.service.getCharacteristic(BLE_SETUP_WRITE_UUID);
+          if (this.closed) throw new Error("配网会话已关闭");
+          phase = "读取配网通知特征";
           notifier = await this.service.getCharacteristic(BLE_SETUP_NOTIFY_UUID);
         } catch (cause) {
           if (
@@ -155,12 +167,17 @@ export class BleProvisioningClient {
         this.writer = writer;
         this.notifier = notifier;
         notifier.addEventListener("characteristicvaluechanged", this.receive);
+        phase = "订阅配网回复";
         await notifier.startNotifications();
         if (this.closed) {
           notifier.removeEventListener("characteristicvaluechanged", this.receive);
           throw new Error("配网会话已关闭");
         }
       })();
+      this.initialization = Promise.race([initialize, this.cancelled]).finally(() =>
+        clearTimeout(timer),
+      );
+    }
     await this.initialization;
   }
   private fail(error: Error) {
@@ -232,7 +249,12 @@ export class BleProvisioningClient {
           if (this.closed || !this.pending) break;
           this.writing = true;
           const write = Promise.resolve()
-            .then(() => this.writer!.writeValueWithResponse!(frame))
+            .then(() =>
+              retryGattBusy(
+                () => this.writer!.writeValueWithResponse!(frame),
+                () => !this.closed && !!this.pending,
+              ),
+            )
             .finally(() => {
               this.writing = false;
             });
@@ -241,7 +263,10 @@ export class BleProvisioningClient {
         return await result;
       } catch (error) {
         if (this.pending) {
-          const failure = new Error("配网写入失败，请检查蓝牙配对权限并重试");
+          const detail = error instanceof DOMException ? `（${error.name}: ${error.message}）` : "";
+          const failure = new Error(`配网写入失败${detail}，请检查蓝牙配对权限并重试`, {
+            cause: error,
+          });
           this.fail(failure);
           throw failure;
         }
@@ -252,16 +277,20 @@ export class BleProvisioningClient {
     this.queue = result.catch(() => {});
     return Promise.race([result, this.cancelled]);
   }
-  dispose() {
+  /** 只结束配网客户端；遥测的 GATT 由外层连接器管理。 */
+  private close(reason: Error) {
     if (this.closed) return;
     this.closed = true;
-    this.cancelRequest(new Error("配网已取消或蓝牙已断开"));
+    this.cancelRequest(reason);
     this.generation++;
     this.notifier?.removeEventListener("characteristicvaluechanged", this.receive);
     clearTimeout(this.frameTimer);
     this.assembler.reset();
-    this.fail(new Error("配网已取消或蓝牙已断开"));
+    this.fail(reason);
     this.writer = undefined;
     this.notifier = undefined;
+  }
+  dispose() {
+    this.close(new Error("配网已取消或蓝牙已断开"));
   }
 }

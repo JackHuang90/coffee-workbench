@@ -14,6 +14,12 @@ Color breathe(Color color,uint32_t time,uint32_t period){
  const uint32_t level=32+223*ramp/(period/2);
  return {uint8_t(color.r*level/255),uint8_t(color.g*level/255),uint8_t(color.b*level/255)};
 }
+State networkState(const Inputs& in){
+ if(in.wifiConnecting)return State::WifiConnecting;
+ if(in.configured&&!in.wifiConnected)return State::ConfiguredOffline;
+ if(in.wifiConnected)return State::WifiConnected;
+ return State::Unconfigured;
+}
 State select(const Inputs& in,uint32_t elapsed){
  if(in.error)return State::Error;
  if(in.reset)return State::Reset;
@@ -26,29 +32,41 @@ State select(const Inputs& in,uint32_t elapsed){
  if(in.setupAuthorized)return State::SetupAuthorized;
  if(in.bleSubscribed)return State::BleSubscribed;
  if(in.bleConnected)return State::BleConnected;
- if(in.wifiConnecting)return State::WifiConnecting;
- if(in.configured&&!in.wifiConnected)return State::ConfiguredOffline;
- if(in.wifiConnected)return State::WifiConnected;
- return State::Unconfigured;
+ return networkState(in);
 }
 }
 Frame render(const Inputs& in,uint32_t elapsed){
- const State state=select(in,elapsed);Color color{};
+ State state=select(in,elapsed);uint32_t phase=elapsed;Color color{};
+ // Reserve two seconds for network status and one for BLE. Telemetry activity
+ // cannot starve the network window; critical/business states above BLE still
+ // own the whole lamp. Restart each window's animation so no pulse is clipped.
+ const bool bleState=state==State::DataTransfer||state==State::SetupAuthorized||
+                     state==State::BleSubscribed||state==State::BleConnected;
+ if((in.bleConnected||in.bleSubscribed)&&bleState){
+  phase=elapsed%3000;
+  if(phase<2000)state=networkState(in);
+  else{
+   phase-=2000;
+   // A 1Hz telemetry burst can align with every BLE window. Reserve the
+   // authorization pulse so repeated activity cannot hide the physical grant.
+   if(in.setupAuthorized&&phase<160)state=State::SetupAuthorized;
+  }
+ }
  switch(state){
- case State::Error:color=pulses(red,elapsed,3,1800);break;
- case State::Reset:case State::CurveReceiving:color=blink(purple,elapsed,240,120);break;
- case State::SetupPending:color=elapsed%600<300?purple:yellow;break;
- case State::Boot:color=breathe({255,255,255},elapsed,1500);break;
- case State::SimulationRunning:color=breathe({255,96,0},elapsed,2000);break;
- case State::CurveLoaded:color=pulses(purple,elapsed,2,1600);break;
- case State::DataTransfer:color=blink(cyan,elapsed,160,80);break;
+ case State::Error:color=pulses(red,phase,3,1800);break;
+ case State::Reset:case State::CurveReceiving:color=blink(purple,phase,240,120);break;
+ case State::SetupPending:color=phase%600<300?purple:yellow;break;
+ case State::Boot:color=breathe({255,255,255},phase,1500);break;
+ case State::SimulationRunning:color=breathe({255,96,0},phase,2000);break;
+ case State::CurveLoaded:color=pulses(purple,phase,2,1600);break;
+ case State::DataTransfer:color=blink(cyan,phase,160,80);break;
  case State::BleSubscribed:color=cyan;break;
- case State::SetupAuthorized:color=blink(purple,elapsed,1600,160);break;
- case State::BleConnected:color=blink(cyan,elapsed,240,120);break;
- case State::WifiConnecting:color=blink(yellow,elapsed,240,120);break;
- case State::ConfiguredOffline:color=pulses(yellow,elapsed,2,1600);break;
+ case State::SetupAuthorized:color=blink(purple,phase,1600,160);break;
+ case State::BleConnected:color=blink(cyan,phase,240,120);break;
+ case State::WifiConnecting:color=blink(yellow,phase,240,120);break;
+ case State::ConfiguredOffline:color=pulses(yellow,phase,2,1600);break;
  case State::WifiConnected:color={0,255,0};break;
- case State::Unconfigured:color=blink({0,0,255},elapsed,1400,700);break;
+ case State::Unconfigured:color=blink({0,0,255},phase,1400,700);break;
  }
  return {state,color};
 }

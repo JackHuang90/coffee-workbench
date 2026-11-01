@@ -112,6 +112,154 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("read-only browser BLE", () => {
+  it.each([
+    ["chooser", "选择设备"],
+    ["connect", "建立连接"],
+    ["service", "查找服务"],
+    ["subscribe", "订阅状态"],
+  ])("preserves the browser error and failure stage at %s", async (stage, label) => {
+    const r = radio(),
+      failure = new DOMException("Connection failed for unknown reason.", "NetworkError");
+    if (stage === "chooser") r.bluetooth.requestDevice.mockRejectedValueOnce(failure);
+    if (stage === "connect") r.gatt.connect.mockRejectedValueOnce(failure);
+    if (stage === "service") r.gatt.getPrimaryService.mockRejectedValueOnce(failure);
+    if (stage === "subscribe") r.characteristic.startNotifications.mockRejectedValueOnce(failure);
+    const c = client();
+    const result = await c.connect({ ip: "" }).catch((cause: Error) => cause);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toContain(
+      "NetworkError: Connection failed for unknown reason.",
+    );
+    expect((result as Error).message).toContain(label);
+    expect(c.snapshot.diagnostic).toContain(label);
+    expect(c.snapshot.state).toBe("lost");
+    expect(c.snapshot.status).toBeNull();
+  });
+
+  it("never revives an early sample after a delayed subscription acknowledgement", async () => {
+    vi.useFakeTimers();
+    const r = radio(),
+      ack = deferred<typeof r.characteristic>();
+    r.characteristic.startNotifications.mockReturnValue(ack.promise);
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    await settle();
+    r.sample();
+    await vi.advanceTimersByTimeAsync(4000);
+    ack.resolve(r.characteristic);
+    await pending;
+    expect(c.snapshot.state).toBe("connected");
+    expect(c.snapshot.status).toBeNull();
+    expect(r.gatt.disconnect).not.toHaveBeenCalled();
+    r.sample({ uptime_ms: 5000 }, 2);
+    expect(c.snapshot.status?.uptime_ms).toBe(5000);
+  });
+
+  it("resynchronizes an incomplete established telemetry frame without dropping setup or GATT", async () => {
+    vi.useFakeTimers();
+    const r = radio(),
+      c = client(),
+      pending = c.connect({ ip: "" });
+    await settle();
+    r.sample();
+    await pending;
+    const setup = c.provisioning;
+    r.send(new TextEncoder().encode(JSON.stringify(status({ uptime_ms: 2000 }))), 2, 0, 12);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(c.snapshot.state).toBe("connected");
+    expect(c.snapshot.status).toBeNull();
+    expect(r.gatt.disconnect).not.toHaveBeenCalled();
+    expect(c.provisioning).toBe(setup);
+    r.sample({ uptime_ms: 4000 }, 3);
+    expect(c.snapshot.status?.uptime_ms).toBe(4000);
+  });
+
+  it("keeps the first chooser attempt alive when the browser hides the page", async () => {
+    const doc = Object.assign(new EventTarget(), { visibilityState: "visible" });
+    vi.stubGlobal("document", doc);
+    const r = radio(),
+      chooser = deferred<typeof r.device>();
+    r.bluetooth.requestDevice.mockReturnValue(chooser.promise);
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    chooser.resolve(r.device);
+    await settle();
+    r.sample();
+    await pending;
+    expect(c.snapshot.state).toBe("connected");
+    expect(r.bluetooth.requestDevice).toHaveBeenCalledOnce();
+    expect(r.gatt.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient connection busy error within the same chooser selection", async () => {
+    vi.useFakeTimers();
+    const r = radio();
+    r.gatt.connect.mockRejectedValueOnce(
+      new DOMException("Connection already in progress.", "NetworkError"),
+    );
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    void pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(1000);
+    r.sample();
+    await pending;
+    expect(c.snapshot.state).toBe("connected");
+    expect(r.bluetooth.requestDevice).toHaveBeenCalledOnce();
+    expect(r.gatt.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the observed Windows connection attempt failure without a second chooser", async () => {
+    vi.useFakeTimers();
+    const r = radio();
+    r.gatt.connect.mockRejectedValueOnce(
+      new DOMException("Connection Error: Connection attempt failed.", "NetworkError"),
+    );
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    void pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(1000);
+    r.sample();
+    await pending;
+    expect(c.snapshot.state).toBe("connected");
+    expect(r.bluetooth.requestDevice).toHaveBeenCalledOnce();
+    expect(r.gatt.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("limits the failed connection recovery to one additional attempt", async () => {
+    vi.useFakeTimers();
+    const r = radio();
+    r.gatt.connect.mockRejectedValue(
+      new DOMException("Connection Error: Connection attempt failed.", "NetworkError"),
+    );
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    const rejected = expect(pending).rejects.toThrow("Connection attempt failed");
+    await vi.advanceTimersByTimeAsync(10000);
+    await rejected;
+    expect(r.gatt.connect).toHaveBeenCalledTimes(2);
+    expect(c.snapshot.state).toBe("lost");
+    expect(c.snapshot.status).toBeNull();
+  });
+
+  it("cancels connection recovery before it can start another connection", async () => {
+    vi.useFakeTimers();
+    const r = radio();
+    r.gatt.connect.mockRejectedValueOnce(
+      new DOMException("Connection Error: Connection attempt failed.", "NetworkError"),
+    );
+    const c = client(),
+      pending = c.connect({ ip: "" });
+    void pending.catch(() => {});
+    await settle();
+    await c.disconnect();
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(r.gatt.connect).toHaveBeenCalledTimes(1);
+    expect(c.snapshot.state).toBe("offline");
+  });
+
   it("lazy setup discovery shares GATT and legacy absence preserves telemetry", async () => {
     const r = radio(),
       c = client();
@@ -321,7 +469,7 @@ describe("read-only browser BLE", () => {
     expect(oldClient.snapshot.state).toBe("offline");
     expect(replacement.snapshot.state).toBe("offline");
   });
-  it.each(["disconnect", "pagehide", "visibilitychange", "dispose"])(
+  it.each(["disconnect", "pagehide", "dispose"])(
     "settles chooser cancellation on %s and never connects or disconnects an unowned late result",
     async (action) => {
       const win = new EventTarget(),
@@ -421,7 +569,7 @@ describe("read-only browser BLE", () => {
       expect(r.gatt.disconnect).toHaveBeenCalled();
     },
   );
-  it("clears data exactly three seconds after the last complete progressing sample", async () => {
+  it("clears stale data without closing GATT and recovers on a new complete sample", async () => {
     vi.useFakeTimers();
     const r = radio(),
       c = client(),
@@ -434,9 +582,11 @@ describe("read-only browser BLE", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(c.snapshot.state).toBe("connected");
     await vi.advanceTimersByTimeAsync(1);
-    expect(c.snapshot.state).toBe("lost");
+    expect(c.snapshot.state).toBe("connected");
     expect(c.snapshot.status).toBeNull();
-    expect(r.gatt.connected).toBe(false);
+    expect(r.gatt.connected).toBe(true);
+    r.sample({ uptime_ms: 5000 }, 3);
+    expect(c.snapshot.status?.uptime_ms).toBe(5000);
     await vi.advanceTimersByTimeAsync(60000);
     expect(r.bluetooth.requestDevice).toHaveBeenCalledOnce();
   });

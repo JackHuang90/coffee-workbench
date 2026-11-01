@@ -40,7 +40,7 @@ struct ble_npl_event {
 struct ble_gap_conn_desc {
  // 当前模拟客户端的连接句柄。
  uint16_t conn_handle=0;
- struct {bool encrypted=false;} sec_state;
+ struct {bool encrypted=false,bonded=false;} sec_state;
 };
 /** 功能：保存主机将要消费的通知内容。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
 struct os_mbuf {
@@ -179,10 +179,13 @@ class BLEAdvertising {
  bool start(){return true;}
 };
 /** 功能：模拟SDK先初始化后注册的生命周期。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
+class BLESecurityCallbacks;
 class BLEDevice {
  public:
  // SDK全局服务器实例。
  inline static BLEServer server;
+ inline static BLESecurityCallbacks* securityCallbacks=nullptr;
+ static void setSecurityCallbacks(BLESecurityCallbacks* callbacks){securityCallbacks=callbacks;}
  // SDK全局广播实例。
  inline static BLEAdvertising advertising;
  /** 功能：安装NPL可调用状态并保存设备名。首次编写日期：2026-10-30；变更日期：2026-10-30；修改记录：2026-10-30：首次编写。 */
@@ -196,3 +199,10 @@ class BLEDevice {
 };
 
 inline int ble_gap_conn_find(uint16_t handle,ble_gap_conn_desc* d){d->conn_handle=handle;d->sec_state.encrypted=ble_test::encrypted;return 0;}
+
+constexpr int BLE_GAP_EVENT_DISCONNECT=1;
+struct ble_gap_event {int type=0;struct {int reason=0;ble_gap_conn_desc conn{};} disconnect;};
+using ble_gap_event_fn=int(ble_gap_event*,void*);
+struct ble_gap_event_listener {ble_gap_event_fn* fn=nullptr;void* arg=nullptr;};
+namespace ble_test {inline ble_gap_event_listener* gapListener=nullptr;}
+inline int ble_gap_event_listener_register(ble_gap_event_listener* listener,ble_gap_event_fn* fn,void* arg){listener->fn=fn;listener->arg=arg;ble_test::gapListener=listener;return 0;}

@@ -211,9 +211,9 @@ async function copyIp() {
     <template v-else-if="connected">
       <h3>蓝牙配网</h3>
       <p>
-        使用当前蓝牙连接设置 2.4 GHz
-        Wi-Fi。系统可能提示蓝牙配对；请按系统提示完成。配对不验证设备身份，请在身边核对设备并短按
-        BOOT 确认。
+        使用当前蓝牙连接设置 2.4 GHz Wi-Fi。打开设置后设备会发起加密配对；请按系统提示完成。若
+        Windows 没有弹出配对提示，请先在系统「设置 → 蓝牙和设备 → 添加设备」中配对
+        Coffee-…，再返回连接。 配对不验证设备身份，请在身边核对设备并短按 BOOT 确认。
       </p>
       <button class="button secondary" :disabled="busy" @click="unlock">
         {{ authorized ? "重新确认配网许可" : "请求配网许可 · 短按 BOOT" }}
@@ -301,14 +301,16 @@ async function copyIp() {
         </fieldset>
       </form>
       <p v-if="state.error" role="alert">{{ state.error }}</p>
-      <p v-if="state.connected && state.ip">
-        设备 IP：<input
-          :value="state.ip"
-          readonly
-          aria-label="设备 IP"
-          @focus="($event.target as HTMLInputElement).select()"
-        /><button class="button secondary" @click="copyIp">复制 IP</button>
-      </p>
+      <div v-if="state.connected && state.ip" class="device-ip">
+        <label
+          >设备 IP：<input
+            :value="state.ip"
+            readonly
+            aria-label="设备 IP"
+            @focus="($event.target as HTMLInputElement).select()"
+        /></label>
+        <button class="button secondary" @click="copyIp">复制 IP</button>
+      </div>
       <p v-else-if="state.ip">候选地址：{{ state.ip }}（尚未确认连接）</p>
       <button class="button secondary" :disabled="busy" @click="close">关闭配网许可</button>
     </template>
@@ -351,9 +353,31 @@ textarea {
 p {
   overflow-wrap: anywhere;
 }
+select {
+  height: auto;
+  min-height: 44px;
+  padding: 8px 32px 8px 12px;
+  line-height: 1.5;
+}
 .button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* Keep the address and action separated, including when a narrow panel wraps. */
+.device-ip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.device-ip label {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.device-ip .button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  white-space: nowrap;
 }
 </style>

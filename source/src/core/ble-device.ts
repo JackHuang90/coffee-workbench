@@ -5,6 +5,7 @@ import { validateDeviceStatus } from "./device-schema.mjs";
 import type { DeviceStatus } from "./device-schema.mjs";
 import { BleProvisioningClient } from "./ble-provisioning";
 import { BleFrameAssembler } from "./ble-framing";
+import { retryGattConnect } from "./ble-gatt";
 export const BLE_SERVICE_UUID = "b4e7a001-9d56-4f1b-a6e0-7d31c2f84590";
 export const BLE_STATUS_UUID = "b4e7a002-9d56-4f1b-a6e0-7d31c2f84590";
 /** 功能：声明本模块需要的只读通知接口，不暴露特征写入。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
@@ -112,6 +113,8 @@ export class BleDeviceClient implements DeviceClient {
   private data: DeviceSnapshot;
   /** 当前连接意图编号，取消或失败都会递增。 */
   private epoch = 0;
+  /** 记录浏览器失败发生的阶段，避免把选择、连接和订阅错误合并成取消提示。 */
+  private connectionStage = "选择设备";
   /** 当前意图拥有的设备；旧操作不得关闭新的同设备会话。 */
   private device?: BleDevice;
   /** 本次意图的 GATT 所有权令牌；取消后仍用于识别迟到的旧连接。 */
@@ -164,9 +167,14 @@ export class BleDeviceClient implements DeviceClient {
   get snapshot(): DeviceSnapshot {
     return { ...this.data, status: this.data.status ? structuredClone(this.data.status) : null };
   }
-  /** 功能：页面隐藏时立即断开，恢复前台不会自动连接。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
+  /** 功能：切换标签保留用户授权的连接；回到前台仍拒绝过期读数。变更日期：2026-11-01。 */
   private visibility = () => {
-    if (document.visibilityState === "hidden") void this.disconnect();
+    if (
+      document.visibilityState === "visible" &&
+      this.latestReceivedAt !== null &&
+      Date.now() - this.latestReceivedAt >= 3000
+    )
+      this.stale();
   };
   /** 功能：离开页面时释放设备和遥测。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   private pageHide = () => {
@@ -229,16 +237,47 @@ export class BleDeviceClient implements DeviceClient {
   }
   /** 功能：把协议或浏览器错误转换为可读诊断。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   private report(cause: unknown): Error {
-    return new Error(
-      messages[cause instanceof Error ? cause.message : ""] ??
-        "蓝牙选择已取消或连接失败；请检查蓝牙权限、固件与设备距离后手动重连。",
-    );
+    const known = messages[cause instanceof Error ? cause.message : ""];
+    if (known) return new Error(known);
+    // 只保留浏览器标准异常；业务异常可能带有应用数据，继续使用通用提示。
+    if (
+      cause instanceof DOMException &&
+      ["NetworkError", "NotFoundError", "SecurityError", "NotSupportedError"].includes(cause.name)
+    ) {
+      const detail = `${cause.name}: ${cause.message.replace(/\s+/g, " ").slice(0, 180)}`;
+      return new Error(`蓝牙${this.connectionStage}失败（${detail}），请手动重连。`);
+    }
+    return new Error("蓝牙选择已取消或连接失败；请检查蓝牙权限、固件与设备距离后手动重连。");
   }
   /** 功能：停止失败连接并隐藏所有旧数据，不自动重试。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   private lose(cause: unknown): void {
     const error = this.report(cause);
     this.cancel();
     this.publish(empty("lost", error.message));
+  }
+  /** 功能：数据过期立即隐藏遥测，但保留 GATT 和配网会话，下一份新样本可恢复显示。 */
+  private stale(): void {
+    if (!this.subscribed) return;
+    this.publish({
+      ...empty("connected", "蓝牙仍连接，但暂无新鲜状态；已隐藏旧读数，正在等待新样本。"),
+      deviceName: this.device?.name || "Coffee BLE",
+    });
+  }
+  /** 功能：已建立会话的丢片只丢弃该帧，等待下一帧重新同步；首次无效帧和错误协议仍关闭。 */
+  private telemetryFailure(cause: unknown): void {
+    if (
+      this.subscribed &&
+      this.latest &&
+      cause instanceof Error &&
+      (cause.message === "ble_frame_timeout" || cause.message === "ble_frame_order")
+    ) {
+      clearTimeout(this.frameTimer);
+      this.frameTimer = undefined;
+      this.assembler.reset();
+      this.stale();
+      return;
+    }
+    this.lose(cause);
   }
   /** 功能：仅返回能力检测结果，不打开选择器。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   async discover(): Promise<boolean> {
@@ -255,7 +294,7 @@ export class BleDeviceClient implements DeviceClient {
     }
     clearTimeout(this.staleTimer);
     this.staleTimer = setTimeout(() => {
-      if (this.current(epoch)) this.lose(new Error("ble_stale"));
+      if (this.current(epoch)) this.stale();
     }, 3000);
     this.latest = status;
     this.latestReceivedAt = Date.now();
@@ -264,6 +303,10 @@ export class BleDeviceClient implements DeviceClient {
   /** 功能：只在订阅确认后展示最新样本，保持原始接收时间。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   private publishLatest(): void {
     if (!this.subscribed || !this.latest) return;
+    if (this.latestReceivedAt === null || Date.now() - this.latestReceivedAt >= 3000) {
+      this.stale();
+      return;
+    }
     const status = this.latest;
     this.publish({
       state: "connected",
@@ -293,7 +336,7 @@ export class BleDeviceClient implements DeviceClient {
             try {
               this.assembler.checkTimeout();
             } catch (cause) {
-              this.lose(cause);
+              this.telemetryFailure(cause);
             }
           }
         }, 2000);
@@ -312,13 +355,14 @@ export class BleDeviceClient implements DeviceClient {
       this.accept(status, epoch);
       first();
     } catch (cause) {
-      this.lose(cause);
+      this.telemetryFailure(cause);
     }
   }
   /** 功能：在点击调用栈中同步打开选择器，再有界等待 GATT 和首帧；忽略 IPv4 参数。首次编写日期：2026-10-30。变更日期：2026-10-30。修改记录：2026-10-30 首次编写。 */
   async connect(_target: { ip: string }): Promise<void> {
     if (this.disposed) throw new Error("连接器已关闭。");
     this.cancel();
+    this.connectionStage = "选择设备";
     const epoch = this.epoch,
       owner = { active: true };
     if (!this.available) {
@@ -347,16 +391,22 @@ export class BleDeviceClient implements DeviceClient {
           if (this.current(epoch)) this.lose(new Error("ble_disconnected"));
         };
         device.addEventListener("gattserverdisconnected", this.deviceDisconnected);
-        const server = await device.gatt.connect();
+        this.connectionStage = "建立连接";
+        const server = await retryGattConnect(
+          () => device.gatt!.connect(),
+          () => this.current(epoch),
+        );
         if (!this.current(epoch)) {
           this.releaseLate(device, owner);
           return;
         }
+        this.connectionStage = "查找服务";
         const service = await server.getPrimaryService(BLE_SERVICE_UUID);
         if (!this.current(epoch)) {
           this.releaseLate(device, owner);
           return;
         }
+        this.connectionStage = "查找状态特征";
         const characteristic = await service.getCharacteristic(BLE_STATUS_UUID);
         if (!this.current(epoch)) {
           this.releaseLate(device, owner);
@@ -369,6 +419,7 @@ export class BleDeviceClient implements DeviceClient {
         });
         this.notification = () => this.receive(characteristic.value, epoch, first);
         characteristic.addEventListener("characteristicvaluechanged", this.notification);
+        this.connectionStage = "订阅状态";
         await characteristic.startNotifications();
         if (!this.current(epoch)) {
           this.releaseLate(device, owner);
@@ -377,6 +428,7 @@ export class BleDeviceClient implements DeviceClient {
         this.service = service;
         this.subscribed = true;
         this.publishLatest();
+        this.connectionStage = "等待首帧";
         await Promise.race([firstFrame, interrupted]);
       })();
       await Promise.race([operation, interrupted]);
